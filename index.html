@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NHT Operations Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">OPERATIONS INTELLIGENCE</div>
+        <h1>NHT Operations Dashboard</h1>
+        <p class="subtitle">Training & batch performance monitoring</p>
+      </div>
+      <div class="upload-box">
+        <label for="excelFile" class="upload-button">Upload NHT Excel</label>
+        <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" hidden>
+        <div id="fileStatus" class="file-status">No file loaded</div>
+      </div>
+    </header>
+
+    <section class="control-bar">
+      <div class="control-group">
+        <label for="monthFilter">Month</label>
+        <select id="monthFilter"><option value="ALL">All months</option></select>
+      </div>
+      <div class="control-group">
+        <label for="locationFilter">Location</label>
+        <select id="locationFilter"><option value="ALL">All locations</option></select>
+      </div>
+      <div class="control-note" id="periodNote">Upload the latest summary Excel to begin.</div>
+    </section>
+
+    <main>
+      <section class="kpi-grid">
+        <article class="kpi"><span>Total Batches</span><strong id="kpiBatches">—</strong><small>from selected data</small></article>
+        <article class="kpi"><span>Total Inflow</span><strong id="kpiInflow">—</strong><small>selected scope</small></article>
+        <article class="kpi"><span>Total Outflow</span><strong id="kpiOutflow">—</strong><small>selected scope</small></article>
+        <article class="kpi"><span>Total Joined</span><strong id="kpiJoined">—</strong><small>selected scope</small></article>
+        <article class="kpi"><span>HR Attrition</span><strong id="kpiHr">—</strong><small>selected scope</small></article>
+        <article class="kpi"><span>Training Attrition</span><strong id="kpiTraining">—</strong><small>selected scope</small></article>
+        <article class="kpi accent"><span>Throughput</span><strong id="kpiThroughput">—</strong><small>weighted result</small></article>
+        <article class="kpi accent"><span>Joining Throughput</span><strong id="kpiJoiningThroughput">—</strong><small>weighted result</small></article>
+      </section>
+
+      <section class="insight-strip">
+        <div>
+          <span class="eyebrow">CURRENT VIEW</span>
+          <h2 id="viewTitle">Awaiting Excel data</h2>
+        </div>
+        <div id="insightText" class="insight-text">Upload the summary file. The dashboard will calculate and redraw the visuals automatically.</div>
+      </section>
+
+      <section class="chart-grid">
+        <article class="panel wide">
+          <div class="panel-head">
+            <div><h3>Throughput Trend</h3><p>Weighted throughput by month.</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div><h3>Location Performance</h3><p>Throughput by location.</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="locationChart"></canvas></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div><h3>Inflow vs Outflow</h3><p>Operational movement over time.</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="movementChart"></canvas></div>
+        </article>
+
+        <article class="panel wide">
+          <div class="panel-head">
+            <div><h3>Attrition Analysis</h3><p>HR attrition compared with training attrition.</p></div>
+          </div>
+          <div class="chart-wrap"><canvas id="attritionChart"></canvas></div>
+        </article>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div><h3>Location Summary</h3><p>Automatically generated from the uploaded workbook.</p></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Location</th><th>Inflow</th><th>Outflow</th><th>HR Attrition</th>
+                <th>Training Attrition</th><th>Joined</th><th>Throughput</th><th>Joining Throughput</th>
+              </tr>
+            </thead>
+            <tbody id="summaryTable">
+              <tr><td colspan="8" class="empty">Upload an Excel file to populate this table.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Browser-only dashboard • Excel data is processed locally</span>
+      <span id="updatedAt">Last upload: —</span>
+    </footer>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
