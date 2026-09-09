@@ -35,6 +35,25 @@ $$;
 
 grant execute on function public.is_nht_uploader() to authenticated;
 
+-- V10 role-read RPC. The frontend uses this instead of directly selecting
+-- from nht_user_roles, avoiding PostgREST 403 errors caused by table grants.
+drop function if exists public.get_nht_role();
+create or replace function public.get_nht_role()
+returns text
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select role
+  from public.nht_user_roles
+  where user_id = auth.uid()
+  limit 1;
+$$;
+
+grant execute on function public.get_nht_role() to authenticated;
+
+
 -- Replace the old "all authenticated users can write" policies.
 drop policy if exists "Authenticated users can write NHT data" on public.nht_dashboard_data;
 drop policy if exists "NHT uploaders can insert NHT data" on public.nht_dashboard_data;

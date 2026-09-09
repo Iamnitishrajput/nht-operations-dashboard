@@ -158,15 +158,31 @@ function parseDbRow(row) {
 async function loadRole(user) {
   currentRole = "viewer";
   try {
-    const { data, error } = await supabaseClient
-      .from("nht_user_roles")
-      .select("role")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (!error && data?.role) currentRole = data.role;
-  } catch (error) { console.error("Role lookup failed", error); }
+    // V10: read the role through a SECURITY DEFINER RPC instead of querying
+    // nht_user_roles directly. This avoids PostgREST table-privilege/RLS 403s
+    // while still returning only the signed-in user's own role.
+    const { data, error } = await supabaseClient.rpc("get_nht_role");
+    if (error) throw error;
+    if (data === "admin" || data === "uploader" || data === "viewer") {
+      currentRole = data;
+    } else {
+      console.warn("No role assigned to this account; defaulting to viewer.");
+    }
+  } catch (error) {
+    console.error("Role lookup failed:", error);
+    const hint = $("uploadHint");
+    if (hint) hint.textContent = "Role could not be verified. Please contact the administrator.";
+  }
   const canUpload = ["admin", "uploader"].includes(currentRole);
-  $("uploadBox")?.classList.toggle("hidden", !canUpload);
+  const uploadButton = $("uploadButton");
+  const uploadHint = $("uploadHint");
+  if (uploadButton) {
+    uploadButton.classList.toggle("disabled", !canUpload);
+    uploadButton.setAttribute("aria-disabled", String(!canUpload));
+    uploadButton.textContent = canUpload ? "↥  Upload / Update Excel" : "🔒  Upload Restricted";
+    uploadButton.style.pointerEvents = canUpload ? "auto" : "none";
+  }
+  if (uploadHint) uploadHint.textContent = canUpload ? "Authorized upload access • changes sync centrally" : "Viewer access • contact the administrator for upload rights";
   $("roleBadge").textContent = currentRole === "admin" ? "ADMIN" : currentRole === "uploader" ? "UPLOADER" : "VIEWER";
 }
 

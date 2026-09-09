@@ -60,3 +60,11 @@ If it contains June, July and August, all three months are replaced.
 If validation fails, the existing live dataset is kept.
 
 The raw Excel file is processed in the browser; the workbook itself is not uploaded to GitHub.
+
+
+## V10 changes
+- Fixed role detection by using a secure `get_nht_role()` RPC, avoiding the frontend 403 caused by direct REST reads of `nht_user_roles`.
+- Preserved RLS and role-based write controls.
+- Rebuilt mobile layout from the supplied phone screenshots: stacked branding, full-width controls, responsive KPI cards, stable chart panels, and a stacked login brand.
+- Added cache-busting query strings to CSS/JS so GitHub Pages does not keep serving the previous mobile CSS.
+- Run the updated `nht_role_access_migration.sql` once in Supabase after deploying V10. Existing users and their assigned roles do not need to be recreated.

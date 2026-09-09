@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>NHT Operations Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=10">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -50,8 +50,10 @@
       </div>
       <div class="top-actions">
         <div class="upload-box" id="uploadBox">
+          <div class="upload-label">DATA MANAGEMENT</div>
           <label for="excelFile" class="upload-button" id="uploadButton"><span>↥</span> Upload / Update Excel</label>
           <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" hidden>
+          <div id="uploadHint" class="upload-hint">Upload access is controlled by role.</div>
           <div id="fileStatus" class="file-status">Connecting to shared data…</div><div id="syncStatus" class="sync-status">Syncing…</div>
         </div>
         <div class="account-box">
@@ -88,7 +90,7 @@
 
       <section class="insight-strip">
         <div><span class="eyebrow">CURRENT VIEW</span><h2 id="viewTitle">Awaiting Excel data</h2></div>
-        <div id="insightText" class="insight-text">Shared operational data is loaded automatically for authorized users.</div>
+        <div class="view-meta"><span class="live-dot"></span><span id="insightText" class="insight-text">Shared operational data is loaded automatically for authorized users.</span></div>
       </section>
 
       <section class="analysis-section">
@@ -111,6 +113,6 @@
 
     <footer><span><strong>HI-TEK SYNDICATE</strong> • Secure NHT operations portal • Excel data is processed and saved to the shared dashboard database</span><span id="updatedAt">Last upload: —</span></footer>
   </div>
-  <script src="script.js"></script>
+  <script src="script.js?v=10"></script>
 </body>
 </html>
