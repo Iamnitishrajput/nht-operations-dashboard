@@ -307,12 +307,40 @@ function filteredRows() {
 function monthlyRows() {
   const groups = {};
   filteredRows().forEach(row => {
-    if (!groups[row.month]) groups[row.month] = { month: row.month, inflow: 0, outflow: 0, hr: 0, training: 0, joined: 0, joiningWeighted: 0 };
+    if (!groups[row.month]) groups[row.month] = {
+      month: row.month,
+      inflow: 0,
+      outflow: 0,
+      hr: 0,
+      training: 0,
+      joined: 0,
+      joiningWeighted: 0,
+      batchCandidates: []
+    };
     const g = groups[row.month];
-    g.inflow += row.inflow; g.outflow += row.outflow; g.hr += row.hr; g.training += row.training; g.joined += row.joined;
-    g.joiningWeighted += rateFraction(row.joiningThroughput) * row.outflow;
+    g.inflow += num(row.inflow);
+    g.outflow += num(row.outflow);
+    g.hr += num(row.hr);
+    g.training += num(row.training);
+    g.joined += num(row.joined);
+    g.joiningWeighted += rateFraction(row.joiningThroughput) * num(row.outflow);
+    if (num(row.batch) > 0) g.batchCandidates.push(num(row.batch));
   });
-  return Object.values(groups).sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
+  return Object.values(groups)
+    .map(g => ({ ...g, batch: g.batchCandidates.length ? Math.max(...g.batchCandidates) : 0 }))
+    .sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
+}
+
+// Batch conducted is a monthly metric in the source workbook. It must not be
+// summed across locations because one batch can contain employees from several
+// locations. The dashboard therefore derives one batch count per month and keeps
+// that same monthly count when a location filter is applied.
+function selectedBatchCount() {
+  const month = $("monthFilter").value;
+  const months = month === "ALL"
+    ? monthlyRows()
+    : monthlyRows().filter(row => row.month === month);
+  return months.reduce((total, row) => total + num(row.batch), 0);
 }
 function monthIndex(month) {
   const order = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -320,11 +348,15 @@ function monthIndex(month) {
 }
 function throughputRate(rows) { const inflow = sum(rows, "inflow"); return inflow ? (sum(rows, "joined") / inflow) * 100 : 0; }
 function joiningThroughputRate(rows) { const outflow = sum(rows, "outflow"); return outflow ? rows.reduce((t, r) => t + rateFraction(r.joiningThroughput) * r.outflow, 0) / outflow * 100 : 0; }
+function locationFilterLabel() {
+  return $("locationFilter").value === "ALL" ? "monthly batches • shared metric" : "monthly batches • shared across locations";
+}
 
 function render() {
   const rows = filteredRows();
   const months = monthlyRows();
-  $("kpiBatches").textContent = format(sum(rows, "batch"));
+  $("kpiBatches").textContent = format(selectedBatchCount());
+  $("kpiBatches").nextElementSibling.textContent = locationFilterLabel();
   $("kpiInflow").textContent = format(sum(rows, "inflow"));
   $("kpiOutflow").textContent = format(sum(rows, "outflow"));
   $("kpiJoined").textContent = format(sum(rows, "joined"));
@@ -336,6 +368,10 @@ function render() {
   const month = $("monthFilter").value;
   const location = $("locationFilter").value;
   $("viewTitle").textContent = (month === "ALL" ? "All months" : month) + (location === "ALL" ? "" : ` • ${location}`);
+  const throughputPanelNote = document.querySelector("#throughputChart")?.closest(".panel")?.querySelector(".panel-head p");
+  const attritionPanelNote = document.querySelector("#attritionChart")?.closest(".panel")?.querySelector(".panel-head p");
+  if (throughputPanelNote) throughputPanelNote.textContent = location === "ALL" ? "Monthly throughput and joining throughput." : `Monthly throughput and joining throughput • ${location}.`;
+  if (attritionPanelNote) attritionPanelNote.textContent = location === "ALL" ? "HR and training attrition by month." : `HR and training attrition by month • ${location}.`;
   $("periodNote").textContent = rawRows.length ? `${rawRows.length} location-level records • shared centrally • monthly total rows excluded` : "No shared NHT data has been uploaded yet.";
 
   const groups = locationGroups(rows);
@@ -361,8 +397,10 @@ function commonScales() { return { responsive:true, maintainAspectRatio:false, a
 function drawThroughput(rows) {
   destroy("throughput");
   const labels = rows.map(r => r.month);
-  const throughputData = rows.map(r => r.inflow ? r.joined/r.inflow*100 : null);
-  const joiningData = rows.map(r => r.outflow ? r.joiningWeighted/r.outflow*100 : null);
+  // Use the filtered location/month aggregation directly. Batch count is never
+  // involved in this calculation.
+  const throughputData = rows.map(r => r.inflow > 0 ? (r.joined / r.inflow) * 100 : null);
+  const joiningData = rows.map(r => r.outflow > 0 ? (r.joiningWeighted / r.outflow) * 100 : null);
   charts.throughput = new Chart($("throughputChart"), { type:"line", data:{labels,datasets:[
     {label:"Throughput",data:throughputData,tension:.35,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#0b5ed7",backgroundColor:"rgba(11,94,215,.10)"},
     {label:"Joining Throughput",data:joiningData,tension:.35,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderDash:[6,5],borderColor:"#e21d2f",backgroundColor:"rgba(226,29,47,.08)"}
@@ -370,7 +408,20 @@ function drawThroughput(rows) {
 }
 function drawLocation(rows) { destroy("location"); const sorted=[...rows].sort((a,b)=>b.rate-a.rate); charts.location=new Chart($("locationChart"),{type:"bar",data:{labels:sorted.map(r=>r.location),datasets:[{label:"Throughput",data:sorted.map(r=>r.rate),borderRadius:6,backgroundColor:"#0b5ed7"}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,max:100,ticks:{callback:v=>`${v}%`},grid:{display:false}},y:{grid:{display:false},ticks:{font:{size:10}}}}}}); }
 function drawMovement(rows) { destroy("movement"); charts.movement=new Chart($("movementChart"),{type:"bar",data:{labels:rows.map(r=>r.month),datasets:[{label:"Inflow",data:rows.map(r=>r.inflow),borderRadius:5,backgroundColor:"#0b5ed7"},{label:"Outflow",data:rows.map(r=>r.outflow),borderRadius:5,backgroundColor:"#e21d2f"}]},options:commonScales()}); }
-function drawAttrition(rows) { destroy("attrition"); charts.attrition=new Chart($("attritionChart"),{type:"line",data:{labels:rows.map(r=>r.month),datasets:[{label:"HR Attrition",data:rows.map(r=>r.hr),tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#e21d2f"},{label:"Training Attrition",data:rows.map(r=>r.training),tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#0b5ed7"}]},options:{...commonScales(),plugins:{...commonScales().plugins,title:{display:true,text:"Attrition trend",align:"start",font:{size:12,weight:"600"},padding:{bottom:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}`}}}}}); }
+function drawAttrition(rows) {
+  destroy("attrition");
+  const labels = rows.map(r => r.month);
+  const hrData = rows.map(r => num(r.hr));
+  const trainingData = rows.map(r => num(r.training));
+  charts.attrition = new Chart($("attritionChart"), {
+    type:"line",
+    data:{labels,datasets:[
+      {label:"HR Attrition",data:hrData,tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#e21d2f"},
+      {label:"Training Attrition",data:trainingData,tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#0b5ed7"}
+    ]},
+    options:{...commonScales(),plugins:{...commonScales().plugins,title:{display:true,text:"Attrition trend",align:"start",font:{size:12,weight:"600"},padding:{bottom:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}`}}}}
+  });
+}
 function drawTable(rows) { const body=$("summaryTable"); if(!rows.length){body.innerHTML='<tr><td colspan="8" class="empty">No records match the selected filters.</td></tr>';return;} body.innerHTML=[...rows].sort((a,b)=>b.rate-a.rate).map(r=>`<tr><td>${escapeHtml(r.location)}</td><td>${format(r.inflow)}</td><td>${format(r.outflow)}</td><td>${format(r.hr)}</td><td>${format(r.training)}</td><td>${format(r.joined)}</td><td>${pct(r.rate)}</td><td>${pct(r.joinRate)}</td></tr>`).join(""); }
 
 function drawLiveInsights(groups, rows) {
