@@ -1,18 +1,62 @@
-# NHT Operations Dashboard — Hi-Tek Syndicate Branded
+# NHT Operations Portal — V8
+
+Hi-Tek Syndicate branded NHT Operations Dashboard.
 
 ## Included
-- Hi-Tek Syndicate logo displayed on login and dashboard header
-- Hi-Tek navy / blue / red / white visual identity
 - Supabase email/password authentication
-- Shared NHT dashboard data stored in Supabase
-- Browser-side Excel parsing
-- Direct authenticated table sync for Excel uploads
-- Month/location filters
-- Throughput and Joining Throughput trend calculations
-- HR and Training Attrition trend
-- Realtime refresh support
+- Role-based access: ADMIN / UPLOADER / VIEWER
+- Central Supabase storage for NHT Excel data
+- Month-scoped Excel replacement: uploading June again replaces June only
+- Excel validation before any live-data replacement
+- Monthly total rows excluded
+- Throughput and Joining Throughput calculated correctly
+- Automatic 5-minute inactivity sign-out
+- PNG download button on every chart
+- Five live data-analyst insight cards with animated rotation
+- Hi-Tek Syndicate logo and corporate colour palette
+- Responsive desktop/mobile layout
+- Supabase Realtime refresh for shared data
 
-## Important
-The SQL setup has already been run in Supabase. Do not upload the SQL file to GitHub unless you need it as a private reference.
+## Required Supabase setup
 
-Keep `hi-tek-syndicate-logo.png` in the same GitHub Pages folder as `index.html` so the logo loads correctly.
+The central data table should already exist from the earlier database setup.
+
+For role-based upload permissions, run `nht_role_access_migration.sql` once in Supabase SQL Editor.
+
+Then create users in Supabase Authentication > Users and assign each user a role in `public.nht_user_roles`:
+
+- `admin` — can upload/update data
+- `uploader` — can upload/update data
+- `viewer` — view only
+
+Example:
+
+```sql
+insert into public.nht_user_roles (user_id, role)
+values ('USER-UUID-HERE', 'viewer')
+on conflict (user_id) do update set role = excluded.role;
+```
+
+Do not put the Supabase secret key in the website. The publishable key in `script.js` is intended for browser use.
+
+## GitHub Pages files
+
+Upload these website files to the repository root:
+- index.html
+- style.css
+- script.js
+- hi-tek-syndicate-logo.png
+
+The SQL files are setup/migration references and do not need to be served by GitHub Pages.
+
+## Excel behaviour
+
+A valid workbook should contain:
+Month, Total Batch Conducted, Location, Total Inflow, Total Outflow,
+HR Attrition, Training Attrition, Throughput, Total Joined, Joining Throughput.
+
+If an upload contains only June, only June is replaced.
+If it contains June, July and August, all three months are replaced.
+If validation fails, the existing live dataset is kept.
+
+The raw Excel file is processed in the browser; the workbook itself is not uploaded to GitHub.

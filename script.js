@@ -1,6 +1,6 @@
-/* NHT Operations Dashboard V4
-   Supabase Auth + shared Supabase database + realtime updates
-   Excel is parsed in-browser; processed summary rows are stored centrally.
+/* NHT Operations Dashboard V8
+   Supabase Auth + role-based upload access + shared Supabase database + realtime updates.
+   Excel is parsed in-browser; validated summary rows are stored centrally.
 */
 const SUPABASE_URL = "https://goypnlxygamrcwuedshz.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_dFI0KenxorgJlbspXucwQg_tzefgC7e";
@@ -14,7 +14,12 @@ const supabaseClient = window.supabase.createClient(
 let rawRows = [];
 let charts = {};
 let currentUser = null;
+let currentRole = "viewer";
 let realtimeChannel = null;
+let inactivityTimer = null;
+let lastActivityAt = 0;
+const INACTIVITY_MS = 5 * 60 * 1000;
+let inactivityInterval = null;
 const $ = id => document.getElementById(id);
 
 const num = value => {
@@ -29,7 +34,6 @@ const rateFraction = value => {
   const n = num(value);
   return n > 1 ? n / 100 : n;
 };
-const safeRatePercent = value => rateFraction(value) * 100;
 const sum = (rows, key) => rows.reduce((total, row) => total + num(row[key]), 0);
 
 function cleanHeader(value) {
@@ -52,6 +56,45 @@ function get(row, names) {
 
 function isTotalText(value) { return /\b(total|grand total|overall)\b/i.test(String(value || "")); }
 function monthBase(value) { return String(value || "").trim().replace(/\s+(total|grand total|overall)\s*$/i, "").trim(); }
+
+function validateWorkbookRows(rows) {
+  if (!rows.length) throw new Error("The worksheet is empty.");
+  const headers = Object.keys(canonical(rows[0]));
+  const required = [
+    "month", "location", "total batch conducted", "total inflow", "total outflow",
+    "hr attrition", "training attrition", "throughput", "total joined", "joining throughput"
+  ];
+  const missing = required.filter(h => !headers.includes(h));
+  if (missing.length) throw new Error(`Missing required columns: ${missing.join(", ")}`);
+
+  const numericFields = [
+    ["Total Batch Conducted", "total batch conducted"],
+    ["Total Inflow", "total inflow"],
+    ["Total Outflow", "total outflow"],
+    ["HR Attrition", "hr attrition"],
+    ["Training Attrition", "training attrition"],
+    ["Throughput", "throughput"],
+    ["Total Joined", "total joined"],
+    ["Joining Throughput", "joining throughput"]
+  ];
+
+  const problems = [];
+  rows.forEach((row, i) => {
+    const x = canonical(row);
+    const rawMonth = String(get(x, ["month"]) || "").trim();
+    const location = String(get(x, ["location"]) || "").trim();
+    const marker = `${rawMonth} ${location}`;
+    if (isTotalText(marker)) return;
+    if (!rawMonth || !location) problems.push(`Row ${i + 2}: Month and Location are required.`);
+    numericFields.forEach(([label, key]) => {
+      const value = get(x, [key]);
+      if (value !== "" && value !== "-" && value !== null && value !== undefined && !Number.isFinite(num(value))) {
+        problems.push(`Row ${i + 2}: ${label} must be numeric.`);
+      }
+    });
+  });
+  if (problems.length) throw new Error(problems.slice(0, 5).join("\n"));
+}
 
 function normalizeRows(rows) {
   let currentMonth = "";
@@ -78,6 +121,15 @@ function normalizeRows(rows) {
       joiningThroughput: num(get(x, ["joining throughput"]))
     });
   });
+
+  const duplicateKeys = new Set();
+  const duplicates = [];
+  output.forEach(row => {
+    const key = `${row.month}|||${row.location}`.toLowerCase();
+    if (duplicateKeys.has(key)) duplicates.push(`${row.month} / ${row.location}`);
+    duplicateKeys.add(key);
+  });
+  if (duplicates.length) throw new Error(`Duplicate Month + Location rows found: ${duplicates.slice(0, 5).join(", ")}`);
   return output;
 }
 
@@ -103,6 +155,21 @@ function parseDbRow(row) {
   };
 }
 
+async function loadRole(user) {
+  currentRole = "viewer";
+  try {
+    const { data, error } = await supabaseClient
+      .from("nht_user_roles")
+      .select("role")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!error && data?.role) currentRole = data.role;
+  } catch (error) { console.error("Role lookup failed", error); }
+  const canUpload = ["admin", "uploader"].includes(currentRole);
+  $("uploadBox")?.classList.toggle("hidden", !canUpload);
+  $("roleBadge").textContent = currentRole === "admin" ? "ADMIN" : currentRole === "uploader" ? "UPLOADER" : "VIEWER";
+}
+
 async function loadSharedData() {
   setSync("Loading shared data…", "loading");
   const { data, error } = await supabaseClient
@@ -113,9 +180,9 @@ async function loadSharedData() {
 
   if (error) {
     console.error(error);
-    setSync("Database setup required", "error");
+    setSync("Data unavailable", "error");
     $("fileStatus").textContent = "Shared data unavailable";
-    $("periodNote").textContent = "The dashboard is connected to login, but the shared data table still needs to be created in Supabase.";
+    $("periodNote").textContent = "Unable to load shared dashboard data.";
     return false;
   }
 
@@ -129,16 +196,27 @@ async function loadSharedData() {
 }
 
 async function uploadToSharedDatabase(file) {
+  if (!["admin", "uploader"].includes(currentRole)) {
+    alert("You have view-only access. Please contact the dashboard administrator for upload access.");
+    return;
+  }
+
   $("fileStatus").textContent = `Reading ${file.name}…`;
-  setSync("Processing Excel…", "loading");
+  setSync("Validating Excel…", "loading");
 
   try {
+    const extension = file.name.toLowerCase().split(".").pop();
+    if (!["xlsx", "xls", "csv"].includes(extension)) throw new Error("Unsupported file type. Please use .xlsx, .xls or .csv.");
+
     const workbook = await readWorkbook(file);
+    if (!workbook.SheetNames?.length) throw new Error("No worksheet found in the file.");
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    validateWorkbookRows(rows);
     const normalized = normalizeRows(rows);
-    if (!normalized.length) throw new Error("No location-level records found");
+    if (!normalized.length) throw new Error("No location-level records found after excluding monthly total rows.");
 
+    const months = [...new Set(normalized.map(row => row.month))];
     const payload = normalized.map(row => ({
       month: row.month,
       location: row.location,
@@ -149,26 +227,19 @@ async function uploadToSharedDatabase(file) {
       training: row.training,
       throughput: row.throughput,
       joined: row.joined,
-      joining_throughput: row.joiningThroughput
-    }));
-
-    // Replace the shared dataset directly through the authenticated Supabase table API.
-    // This avoids RPC/PostgREST function-cache issues while retaining RLS protection.
-    const { error: deleteError } = await supabaseClient
-      .from("nht_dashboard_data")
-      .delete()
-      .not("id", "is", null);
-    if (deleteError) throw deleteError;
-
-    const rowsToInsert = payload.map(row => ({
-      ...row,
+      joining_throughput: row.joiningThroughput,
       updated_by: currentUser?.id || null
     }));
 
-    const { error: insertError } = await supabaseClient
-      .from("nht_dashboard_data")
-      .insert(rowsToInsert);
-    if (insertError) throw insertError;
+    // Important: replace only the months present in this upload.
+    // The database function makes delete + insert one atomic operation.
+    // Uploading June again updates June without deleting July/August.
+    setSync("Saving shared data…", "loading");
+    const { error: syncError } = await supabaseClient.rpc("replace_nht_months", {
+      p_rows: payload,
+      p_months: months
+    });
+    if (syncError) throw syncError;
 
     rawRows = normalized;
     populateFilters();
@@ -179,9 +250,10 @@ async function uploadToSharedDatabase(file) {
     $("periodNote").textContent = `${rawRows.length} location-level records • shared centrally • monthly total rows excluded`;
   } catch (error) {
     console.error(error);
-    $("fileStatus").textContent = "Could not update shared data";
+    $("fileStatus").textContent = "Update rejected — existing data kept";
     setSync("Update failed", "error");
-    alert("The Excel file could not be processed or saved. Please check the workbook and confirm the Supabase database setup is complete.");
+    alert(`The Excel update was rejected.\n\n${error.message}\n\nNo replacement was made until the file passed validation.`);
+    await loadSharedData();
   }
 }
 
@@ -190,9 +262,9 @@ function readWorkbook(file) {
     const reader = new FileReader();
     reader.onload = event => {
       try { resolve(XLSX.read(new Uint8Array(event.target.result), { type: "array" })); }
-      catch (error) { reject(error); }
+      catch (error) { reject(new Error("The workbook could not be read. Please check that it is a valid Excel file.")); }
     };
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error("The browser could not read the selected file."));
     reader.readAsArrayBuffer(file);
   });
 }
@@ -203,241 +275,187 @@ function populateFilters() {
   const currentMonth = $("monthFilter").value;
   const currentLocation = $("locationFilter").value;
 
-  $("monthFilter").innerHTML = '<option value="ALL">All months</option>' +
-    months.map(month => `<option value="${escapeHtml(month)}">${escapeHtml(month)}</option>`).join("");
-  $("locationFilter").innerHTML = '<option value="ALL">All locations</option>' +
-    locations.map(location => `<option value="${escapeHtml(location)}">${escapeHtml(location)}</option>`).join("");
+  $("monthFilter").innerHTML = '<option value="ALL">All months</option>' + months.map(month => `<option value="${escapeHtml(month)}">${escapeHtml(month)}</option>`).join("");
+  $("locationFilter").innerHTML = '<option value="ALL">All locations</option>' + locations.map(location => `<option value="${escapeHtml(location)}">${escapeHtml(location)}</option>`).join("");
 
   if (months.includes(currentMonth)) $("monthFilter").value = currentMonth;
   if (locations.includes(currentLocation)) $("locationFilter").value = currentLocation;
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character]));
-}
-
+function escapeHtml(value) { return String(value).replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character])); }
 function filteredRows() {
   const month = $("monthFilter").value;
   const location = $("locationFilter").value;
   return rawRows.filter(row => (month === "ALL" || row.month === month) && (location === "ALL" || row.location === location));
 }
-
 function monthlyRows() {
   const groups = {};
   filteredRows().forEach(row => {
     if (!groups[row.month]) groups[row.month] = { month: row.month, inflow: 0, outflow: 0, hr: 0, training: 0, joined: 0, joiningWeighted: 0 };
     const g = groups[row.month];
-    g.inflow += row.inflow;
-    g.outflow += row.outflow;
-    g.hr += row.hr;
-    g.training += row.training;
-    g.joined += row.joined;
+    g.inflow += row.inflow; g.outflow += row.outflow; g.hr += row.hr; g.training += row.training; g.joined += row.joined;
     g.joiningWeighted += rateFraction(row.joiningThroughput) * row.outflow;
   });
   return Object.values(groups).sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
 }
-
 function monthIndex(month) {
   const order = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-  const i = order.indexOf(month);
-  return i === -1 ? 999 : i;
+  const i = order.indexOf(month); return i === -1 ? 999 : i;
 }
-
-function throughputRate(rows) {
-  const inflow = sum(rows, "inflow");
-  return inflow ? (sum(rows, "joined") / inflow) * 100 : 0;
-}
-
-function joiningThroughputRate(rows) {
-  const outflow = sum(rows, "outflow");
-  if (!outflow) return 0;
-  return rows.reduce((total, row) => total + rateFraction(row.joiningThroughput) * row.outflow, 0) / outflow * 100;
-}
+function throughputRate(rows) { const inflow = sum(rows, "inflow"); return inflow ? (sum(rows, "joined") / inflow) * 100 : 0; }
+function joiningThroughputRate(rows) { const outflow = sum(rows, "outflow"); return outflow ? rows.reduce((t, r) => t + rateFraction(r.joiningThroughput) * r.outflow, 0) / outflow * 100 : 0; }
 
 function render() {
   const rows = filteredRows();
   const months = monthlyRows();
-  const batches = sum(rows, "batch");
-  const inflow = sum(rows, "inflow");
-  const outflow = sum(rows, "outflow");
-  const joined = sum(rows, "joined");
-  const hr = sum(rows, "hr");
-  const training = sum(rows, "training");
-  const throughput = throughputRate(rows);
-  const joiningFinal = joiningThroughputRate(rows);
-
-  $("kpiBatches").textContent = format(batches);
-  $("kpiInflow").textContent = format(inflow);
-  $("kpiOutflow").textContent = format(outflow);
-  $("kpiJoined").textContent = format(joined);
-  $("kpiHr").textContent = format(hr);
-  $("kpiTraining").textContent = format(training);
-  $("kpiThroughput").textContent = pct(throughput);
-  $("kpiJoiningThroughput").textContent = pct(joiningFinal);
+  $("kpiBatches").textContent = format(sum(rows, "batch"));
+  $("kpiInflow").textContent = format(sum(rows, "inflow"));
+  $("kpiOutflow").textContent = format(sum(rows, "outflow"));
+  $("kpiJoined").textContent = format(sum(rows, "joined"));
+  $("kpiHr").textContent = format(sum(rows, "hr"));
+  $("kpiTraining").textContent = format(sum(rows, "training"));
+  $("kpiThroughput").textContent = pct(throughputRate(rows));
+  $("kpiJoiningThroughput").textContent = pct(joiningThroughputRate(rows));
 
   const month = $("monthFilter").value;
   const location = $("locationFilter").value;
   $("viewTitle").textContent = (month === "ALL" ? "All months" : month) + (location === "ALL" ? "" : ` • ${location}`);
+  $("periodNote").textContent = rawRows.length ? `${rawRows.length} location-level records • shared centrally • monthly total rows excluded` : "No shared NHT data has been uploaded yet.";
 
-  const best = locationGroups(rows).sort((a, b) => b.rate - a.rate)[0];
-  $("insightText").textContent = rows.length
-    ? `${rows.length} location-level records are in view. ${best ? `${best.location} currently has the highest calculated throughput at ${pct(best.rate)}.` : ""}`
-    : "No data matches the current filters.";
+  const groups = locationGroups(rows);
+  const best = [...groups].sort((a,b) => b.rate-a.rate)[0];
+  $("insightText").textContent = rows.length ? `${rows.length} location-level records are in view. ${best ? `${best.location} currently has the highest calculated throughput at ${pct(best.rate)}.` : ""}` : "No data matches the current filters.";
 
-  $("periodNote").textContent = rawRows.length
-    ? `${rawRows.length} location-level records • shared centrally • monthly total rows excluded`
-    : "No shared NHT data has been uploaded yet.";
-
-  drawThroughput(months);
-  drawLocation(locationGroups(rows));
-  drawMovement(months);
-  drawAttrition(months);
-  drawTable(locationGroups(rows));
+  drawThroughput(months); drawLocation(groups); drawMovement(months); drawAttrition(months); drawTable(groups); drawLiveInsights(groups, rows);
 }
-
 function format(value) { return Math.round(value).toLocaleString("en-IN"); }
-
 function locationGroups(rows) {
   const groups = {};
   rows.forEach(row => {
     if (!groups[row.location]) groups[row.location] = { location: row.location, inflow: 0, outflow: 0, hr: 0, training: 0, joined: 0, joiningWeighted: 0 };
     const g = groups[row.location];
-    g.inflow += row.inflow;
-    g.outflow += row.outflow;
-    g.hr += row.hr;
-    g.training += row.training;
-    g.joined += row.joined;
+    g.inflow += row.inflow; g.outflow += row.outflow; g.hr += row.hr; g.training += row.training; g.joined += row.joined;
     g.joiningWeighted += rateFraction(row.joiningThroughput) * row.outflow;
   });
-  return Object.values(groups).map(g => ({
-    ...g,
-    rate: g.inflow ? (g.joined / g.inflow) * 100 : 0,
-    joinRate: g.outflow ? (g.joiningWeighted / g.outflow) * 100 : 0
-  }));
+  return Object.values(groups).map(g => ({ ...g, rate: g.inflow ? g.joined/g.inflow*100 : 0, joinRate: g.outflow ? g.joiningWeighted/g.outflow*100 : 0, attrition: g.hr + g.training, attritionRate: g.inflow ? (g.hr+g.training)/g.inflow*100 : 0, dropOff: Math.max(g.inflow-g.outflow,0) }));
 }
-
 function destroy(name) { if (charts[name]) { charts[name].destroy(); charts[name] = null; } }
-
-function commonScales() {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 500 },
-    plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } } },
-    scales: { x: { grid: { display: false }, ticks: { font: { size: 10 } } }, y: { beginAtZero: true, ticks: { font: { size: 10 } } } }
-  };
-}
+function commonScales() { return { responsive:true, maintainAspectRatio:false, animation:{duration:500}, plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,font:{size:11}}}}, scales:{x:{grid:{display:false},ticks:{font:{size:10}}},y:{beginAtZero:true,ticks:{font:{size:10}}}}}; }
 
 function drawThroughput(rows) {
   destroy("throughput");
-  const hasLocationFilter = $("locationFilter").value !== "ALL";
   const labels = rows.map(r => r.month);
-  const throughputData = rows.map(r => r.inflow ? (r.joined / r.inflow) * 100 : null);
-  const joiningData = rows.map(r => r.outflow ? (r.joiningWeighted / r.outflow) * 100 : null);
+  const throughputData = rows.map(r => r.inflow ? r.joined/r.inflow*100 : null);
+  const joiningData = rows.map(r => r.outflow ? r.joiningWeighted/r.outflow*100 : null);
+  charts.throughput = new Chart($("throughputChart"), { type:"line", data:{labels,datasets:[
+    {label:"Throughput",data:throughputData,tension:.35,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#0b5ed7",backgroundColor:"rgba(11,94,215,.10)"},
+    {label:"Joining Throughput",data:joiningData,tension:.35,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderDash:[6,5],borderColor:"#e21d2f",backgroundColor:"rgba(226,29,47,.08)"}
+  ]}, options:{...commonScales(),scales:{...commonScales().scales,y:{beginAtZero:true,max:100,ticks:{callback:value=>`${value}%`}}},plugins:{...commonScales().plugins,title:{display:true,text:$("locationFilter").value!=="ALL"?"Monthly trend for selected location":"Monthly throughput trend",align:"start",font:{size:12,weight:"600"},padding:{bottom:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${num(ctx.raw).toFixed(1)}%`}}}}});
+}
+function drawLocation(rows) { destroy("location"); const sorted=[...rows].sort((a,b)=>b.rate-a.rate); charts.location=new Chart($("locationChart"),{type:"bar",data:{labels:sorted.map(r=>r.location),datasets:[{label:"Throughput",data:sorted.map(r=>r.rate),borderRadius:6,backgroundColor:"#0b5ed7"}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,max:100,ticks:{callback:v=>`${v}%`},grid:{display:false}},y:{grid:{display:false},ticks:{font:{size:10}}}}}}); }
+function drawMovement(rows) { destroy("movement"); charts.movement=new Chart($("movementChart"),{type:"bar",data:{labels:rows.map(r=>r.month),datasets:[{label:"Inflow",data:rows.map(r=>r.inflow),borderRadius:5,backgroundColor:"#0b5ed7"},{label:"Outflow",data:rows.map(r=>r.outflow),borderRadius:5,backgroundColor:"#e21d2f"}]},options:commonScales()}); }
+function drawAttrition(rows) { destroy("attrition"); charts.attrition=new Chart($("attritionChart"),{type:"line",data:{labels:rows.map(r=>r.month),datasets:[{label:"HR Attrition",data:rows.map(r=>r.hr),tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#e21d2f"},{label:"Training Attrition",data:rows.map(r=>r.training),tension:.3,borderWidth:3,pointRadius:4,pointHoverRadius:6,spanGaps:true,borderColor:"#0b5ed7"}]},options:{...commonScales(),plugins:{...commonScales().plugins,title:{display:true,text:"Attrition trend",align:"start",font:{size:12,weight:"600"},padding:{bottom:10}},tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}`}}}}}); }
+function drawTable(rows) { const body=$("summaryTable"); if(!rows.length){body.innerHTML='<tr><td colspan="8" class="empty">No records match the selected filters.</td></tr>';return;} body.innerHTML=[...rows].sort((a,b)=>b.rate-a.rate).map(r=>`<tr><td>${escapeHtml(r.location)}</td><td>${format(r.inflow)}</td><td>${format(r.outflow)}</td><td>${format(r.hr)}</td><td>${format(r.training)}</td><td>${format(r.joined)}</td><td>${pct(r.rate)}</td><td>${pct(r.joinRate)}</td></tr>`).join(""); }
 
-  charts.throughput = new Chart($("throughputChart"), {
-    type: "line",
-    data: { labels, datasets: [
-      { label: "Throughput", data: throughputData, tension: 0.35, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#0b5ed7", backgroundColor: "rgba(11,94,215,.10)" },
-      { label: "Joining Throughput", data: joiningData, tension: 0.35, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderDash: [6,5], borderColor: "#e21d2f", backgroundColor: "rgba(226,29,47,.08)" }
-    ] },
-    options: {
-      ...commonScales(),
-      scales: { ...commonScales().scales, y: { beginAtZero: true, max: 100, ticks: { callback: value => `${value}%` } } },
-      plugins: {
-        ...commonScales().plugins,
-        title: { display: true, text: hasLocationFilter ? "Monthly trend for selected location" : "Monthly throughput trend", align: "start", font: { size: 12, weight: "600" }, padding: { bottom: 10 } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${num(ctx.raw).toFixed(1)}%` } }
-      }
-    }
-  });
+function drawLiveInsights(groups, rows) {
+  const el = $("analysisGrid");
+  if (!el) return;
+  if (!groups.length) { el.innerHTML = '<div class="analysis-empty">No live insights available for the current filters.</div>'; return; }
+  const highAttr = [...groups].sort((a,b)=>b.attrition-a.attrition)[0];
+  const lowJoin = [...groups].sort((a,b)=>a.joinRate-b.joinRate)[0];
+  const highThroughput = [...groups].sort((a,b)=>b.rate-a.rate)[0];
+  const highInflow = [...groups].sort((a,b)=>b.inflow-a.inflow)[0];
+  const largestDrop = [...groups].sort((a,b)=>b.dropOff-a.dropOff)[0];
+  const cards = [
+    {tag:"HIGH ATTRITION", title:highAttr.location, value:`${format(highAttr.attrition)} exits`, text:`HR + training attrition is ${pct(highAttr.attritionRate)} of inflow.`},
+    {tag:"LOW JOINING THROUGHPUT", title:lowJoin.location, value:pct(lowJoin.joinRate), text:`Lowest joining throughput in the current selection.`},
+    {tag:"BEST THROUGHPUT", title:highThroughput.location, value:pct(highThroughput.rate), text:`Highest joined-to-inflow conversion in view.`},
+    {tag:"LARGEST INFLOW", title:highInflow.location, value:format(highInflow.inflow), text:`Largest candidate inflow in the current selection.`},
+    {tag:"BIGGEST DROP-OFF", title:largestDrop.location, value:format(largestDrop.dropOff), text:`Inflow minus outflow, highlighting the largest operational drop-off.`}
+  ];
+  el.innerHTML = cards.map((c,i)=>`<article class="analysis-card" style="--delay:${i*90}ms"><span>${c.tag}</span><h4>${escapeHtml(c.title)}</h4><strong>${c.value}</strong><p>${c.text}</p></article>`).join("");
+  startInsightTicker();
 }
 
-function drawLocation(rows) {
-  destroy("location");
-  const sorted = [...rows].sort((a, b) => b.rate - a.rate);
-  charts.location = new Chart($("locationChart"), { type: "bar", data: { labels: sorted.map(r => r.location), datasets: [{ label: "Throughput", data: sorted.map(r => r.rate), borderRadius: 6, backgroundColor: "#0b5ed7" }] }, options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, max: 100, ticks: { callback: value => `${value}%` }, grid: { display: false } }, y: { grid: { display: false }, ticks: { font: { size: 10 } } } } } });
+
+function startInsightTicker() {
+  if (window.__insightTickerStarted) return;
+  window.__insightTickerStarted = true;
+  setInterval(() => {
+    const cards = [...document.querySelectorAll(".analysis-card")];
+    if (!cards.length) return;
+    cards.forEach(card => card.classList.remove("insight-active"));
+    const index = (Number(document.body.dataset.insightIndex || 0) + 1) % cards.length;
+    document.body.dataset.insightIndex = index;
+    cards[index].classList.add("insight-active");
+  }, 2800);
 }
 
-function drawMovement(rows) {
-  destroy("movement");
-  charts.movement = new Chart($("movementChart"), { type: "bar", data: { labels: rows.map(r => r.month), datasets: [{ label: "Inflow", data: rows.map(r => r.inflow), borderRadius: 5, backgroundColor: "#0b5ed7" }, { label: "Outflow", data: rows.map(r => r.outflow), borderRadius: 5, backgroundColor: "#e21d2f" }] }, options: commonScales() });
-}
-
-function drawAttrition(rows) {
-  destroy("attrition");
-  charts.attrition = new Chart($("attritionChart"), {
-    type: "line",
-    data: { labels: rows.map(r => r.month), datasets: [
-      { label: "HR Attrition", data: rows.map(r => r.hr), tension: 0.3, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#e21d2f" },
-      { label: "Training Attrition", data: rows.map(r => r.training), tension: 0.3, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#0b5ed7" }
-    ] },
-    options: {
-      ...commonScales(),
-      plugins: { ...commonScales().plugins, title: { display: true, text: "Attrition trend", align: "start", font: { size: 12, weight: "600" }, padding: { bottom: 10 } }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}` } } }
-    }
-  });
-}
-
-function drawTable(rows) {
-  const body = $("summaryTable");
-  if (!rows.length) { body.innerHTML = '<tr><td colspan="8" class="empty">No records match the selected filters.</td></tr>'; return; }
-  body.innerHTML = [...rows].sort((a,b) => b.rate-a.rate).map(r => `<tr><td>${escapeHtml(r.location)}</td><td>${format(r.inflow)}</td><td>${format(r.outflow)}</td><td>${format(r.hr)}</td><td>${format(r.training)}</td><td>${format(r.joined)}</td><td>${pct(r.rate)}</td><td>${pct(r.joinRate)}</td></tr>`).join("");
+function downloadChart(canvasId, name) {
+  const chart = charts[canvasId.replace("Chart", "")];
+  if (!chart) return;
+  const link = document.createElement("a");
+  link.download = `NHT-${name}-${new Date().toISOString().slice(0,10)}.png`;
+  link.href = chart.toBase64Image("image/png", 1);
+  link.click();
 }
 
 function subscribeToRealtime() {
   if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
   realtimeChannel = supabaseClient.channel("nht-dashboard-live")
-    .on("postgres_changes", { event: "*", schema: "public", table: "nht_dashboard_data" }, async () => {
-      setSync("Updating…", "loading");
-      await loadSharedData();
-    })
-    .subscribe(status => {
-      if (status === "SUBSCRIBED") setSync(`Live • ${rawRows.length} records`, "live");
-    });
+    .on("postgres_changes", {event:"*",schema:"public",table:"nht_dashboard_data"}, async()=>{setSync("Updating…","loading");await loadSharedData();})
+    .subscribe(status=>{if(status==="SUBSCRIBED")setSync(`Live • ${rawRows.length} records`,"live");});
+}
+
+function updateIdleIndicator() {
+  const el = $("idleStatus");
+  if (!el || !currentUser || !lastActivityAt) return;
+  const remaining = Math.max(0, INACTIVITY_MS - (Date.now() - lastActivityAt));
+  const mins = Math.floor(remaining / 60000);
+  const secs = Math.floor((remaining % 60000) / 1000).toString().padStart(2,"0");
+  el.textContent = `Auto sign-out in ${mins}:${secs} idle`;
+  el.classList.toggle("idle-warning", remaining <= 60000);
+}
+function resetInactivityTimer() {
+  if (!currentUser) return;
+  const now = Date.now();
+  if (now - lastActivityAt < 1000) return;
+  lastActivityAt = now;
+  clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(async()=>{
+    if (!currentUser) return;
+    if (realtimeChannel) await supabaseClient.removeChannel(realtimeChannel);
+    await supabaseClient.auth.signOut();
+    alert("You have been signed out after 5 minutes of inactivity.");
+  }, INACTIVITY_MS);
+  updateIdleIndicator();
+}
+function startInactivityMonitor() {
+  if (window.__idleMonitorStarted) { resetInactivityTimer(); return; }
+  window.__idleMonitorStarted = true;
+  ["click","keydown","mousemove","scroll","touchstart"].forEach(eventName => window.addEventListener(eventName, resetInactivityTimer, {passive:true}));
+  inactivityInterval = setInterval(updateIdleIndicator, 1000);
+  resetInactivityTimer();
 }
 
 function showDashboard(user) {
-  $("authLoading").classList.add("hidden");
-  $("loginScreen").classList.add("hidden");
-  $("appShell").classList.remove("hidden");
+  $("authLoading").classList.add("hidden"); $("loginScreen").classList.add("hidden"); $("appShell").classList.remove("hidden");
   $("signedInAs").textContent = user?.email || "Signed in";
+  currentUser = user;
   if (!window.__dashboardInitialized) {
     window.__dashboardInitialized = true;
-    currentUser = user;
-    $("excelFile").addEventListener("change", event => { if (event.target.files[0]) { uploadToSharedDatabase(event.target.files[0]); event.target.value = ""; } });
-    $("monthFilter").addEventListener("change", render);
-    $("locationFilter").addEventListener("change", render);
-    loadSharedData().then(subscribeToRealtime);
+    $("excelFile").addEventListener("change",event=>{if(event.target.files[0]){uploadToSharedDatabase(event.target.files[0]);event.target.value="";}});
+    $("monthFilter").addEventListener("change",render); $("locationFilter").addEventListener("change",render);
+    document.querySelectorAll(".chart-download").forEach(button=>button.addEventListener("click",()=>downloadChart(button.dataset.chart,button.dataset.name)));
   }
+  startInactivityMonitor();
+  resetInactivityTimer();
+  loadRole(user).then(()=>loadSharedData().then(subscribeToRealtime));
 }
+function showLogin(message="") { clearTimeout(inactivityTimer); currentUser=null; $("authLoading").classList.add("hidden"); $("appShell").classList.add("hidden"); $("loginScreen").classList.remove("hidden"); $("loginError").textContent=message; }
+async function signIn(email,password){$("loginButton").disabled=true;$("loginButton").textContent="Signing in…";$("loginError").textContent="";const{error}=await supabaseClient.auth.signInWithPassword({email,password});if(error)$("loginError").textContent="Unable to sign in. Please check your email and password.";$("loginButton").disabled=false;$("loginButton").textContent="Sign in";}
+async function startAuth(){try{const{data,error}=await supabaseClient.auth.getSession();if(error){showLogin("Unable to check your secure session. Please try again.");return;}if(data.session?.user)showDashboard(data.session.user);else showLogin();supabaseClient.auth.onAuthStateChange((_event,session)=>{if(session?.user)showDashboard(session.user);else showLogin();});}catch(error){console.error(error);showLogin("Unable to connect to secure authentication.");}}
 
-function showLogin(message = "") {
-  $("authLoading").classList.add("hidden");
-  $("appShell").classList.add("hidden");
-  $("loginScreen").classList.remove("hidden");
-  $("loginError").textContent = message;
-}
-
-async function signIn(email, password) {
-  $("loginButton").disabled = true;
-  $("loginButton").textContent = "Signing in…";
-  $("loginError").textContent = "";
-  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-  if (error) $("loginError").textContent = "Unable to sign in. Please check your email and password.";
-  $("loginButton").disabled = false;
-  $("loginButton").textContent = "Sign in";
-}
-
-async function startAuth() {
-  try {
-    const { data, error } = await supabaseClient.auth.getSession();
-    if (error) { showLogin("Unable to check your secure session. Please try again."); return; }
-    if (data.session?.user) showDashboard(data.session.user); else showLogin();
-    supabaseClient.auth.onAuthStateChange((_event, session) => { if (session?.user) showDashboard(session.user); else showLogin(); });
-  } catch (error) { console.error(error); showLogin("Unable to connect to secure authentication."); }
-}
-
-$("loginForm").addEventListener("submit", async event => { event.preventDefault(); await signIn($("loginEmail").value.trim(), $("loginPassword").value); });
-$("signOutButton").addEventListener("click", async () => { if (realtimeChannel) await supabaseClient.removeChannel(realtimeChannel); await supabaseClient.auth.signOut(); });
+$("loginForm").addEventListener("submit",async event=>{event.preventDefault();await signIn($("loginEmail").value.trim(),$("loginPassword").value);});
+$("signOutButton").addEventListener("click",async()=>{clearTimeout(inactivityTimer);if(realtimeChannel)await supabaseClient.removeChannel(realtimeChannel);await supabaseClient.auth.signOut();});
 startAuth();

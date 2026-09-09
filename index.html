@@ -49,12 +49,13 @@
         </div>
       </div>
       <div class="top-actions">
-        <div class="upload-box">
-          <label for="excelFile" class="upload-button"><span>↥</span> Upload / Update Excel</label>
+        <div class="upload-box" id="uploadBox">
+          <label for="excelFile" class="upload-button" id="uploadButton"><span>↥</span> Upload / Update Excel</label>
           <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" hidden>
           <div id="fileStatus" class="file-status">Connecting to shared data…</div><div id="syncStatus" class="sync-status">Syncing…</div>
         </div>
         <div class="account-box">
+          <span id="roleBadge" class="role-badge">VIEWER</span>
           <span id="signedInAs">Signed in</span>
           <button id="signOutButton" type="button" class="signout-button">Sign out</button>
         </div>
@@ -90,11 +91,16 @@
         <div id="insightText" class="insight-text">Shared operational data is loaded automatically for authorized users.</div>
       </section>
 
+      <section class="analysis-section">
+        <div class="analysis-heading"><div><span class="eyebrow live-eyebrow"><i></i> LIVE ANALYTICS</span><h3>What the data is telling us</h3><p>Automatically generated from the current month and location selection.</p></div></div>
+        <div class="analysis-grid" id="analysisGrid"></div>
+      </section>
+
       <section class="chart-grid">
-        <article class="panel wide"><div class="panel-head"><div><h3>Throughput Trend</h3><p>Weighted throughput and joining throughput by month.</p></div></div><div class="chart-wrap"><canvas id="throughputChart"></canvas></div></article>
-        <article class="panel"><div class="panel-head"><div><h3>Location Performance</h3><p>Throughput by location.</p></div></div><div class="chart-wrap"><canvas id="locationChart"></canvas></div></article>
-        <article class="panel"><div class="panel-head"><div><h3>Inflow vs Outflow</h3><p>Operational inflow and outflow by month.</p></div></div><div class="chart-wrap"><canvas id="movementChart"></canvas></div></article>
-        <article class="panel wide"><div class="panel-head"><div><h3>Attrition Analysis</h3><p>HR and training attrition by month.</p></div></div><div class="chart-wrap"><canvas id="attritionChart"></canvas></div></article>
+        <article class="panel wide"><div class="panel-head"><div><h3>Throughput Trend</h3><p>Throughput and joining throughput by month.</p></div><button class="chart-download" data-chart="throughputChart" data-name="throughput-trend">↓ PNG</button></div><div class="chart-wrap"><canvas id="throughputChart"></canvas></div></article>
+        <article class="panel"><div class="panel-head"><div><h3>Location Performance</h3><p>Throughput by location.</p></div><button class="chart-download" data-chart="locationChart" data-name="location-performance">↓ PNG</button></div><div class="chart-wrap"><canvas id="locationChart"></canvas></div></article>
+        <article class="panel"><div class="panel-head"><div><h3>Inflow vs Outflow</h3><p>Operational inflow and outflow by month.</p></div><button class="chart-download" data-chart="movementChart" data-name="inflow-vs-outflow">↓ PNG</button></div><div class="chart-wrap"><canvas id="movementChart"></canvas></div></article>
+        <article class="panel wide"><div class="panel-head"><div><h3>Attrition Analysis</h3><p>HR and training attrition by month.</p></div><button class="chart-download" data-chart="attritionChart" data-name="attrition-analysis">↓ PNG</button></div><div class="chart-wrap"><canvas id="attritionChart"></canvas></div></article>
       </section>
 
       <section class="panel table-panel">
