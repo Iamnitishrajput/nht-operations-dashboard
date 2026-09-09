@@ -152,8 +152,23 @@ async function uploadToSharedDatabase(file) {
       joining_throughput: row.joiningThroughput
     }));
 
-    const { error } = await supabaseClient.rpc("replace_nht_dashboard_data", { p_rows: payload });
-    if (error) throw error;
+    // Replace the shared dataset directly through the authenticated Supabase table API.
+    // This avoids RPC/PostgREST function-cache issues while retaining RLS protection.
+    const { error: deleteError } = await supabaseClient
+      .from("nht_dashboard_data")
+      .delete()
+      .not("id", "is", null);
+    if (deleteError) throw deleteError;
+
+    const rowsToInsert = payload.map(row => ({
+      ...row,
+      updated_by: currentUser?.id || null
+    }));
+
+    const { error: insertError } = await supabaseClient
+      .from("nht_dashboard_data")
+      .insert(rowsToInsert);
+    if (insertError) throw insertError;
 
     rawRows = normalized;
     populateFilters();
@@ -217,7 +232,7 @@ function monthlyRows() {
     g.hr += row.hr;
     g.training += row.training;
     g.joined += row.joined;
-    g.joiningWeighted += rateFraction(row.joiningThroughput) * row.inflow;
+    g.joiningWeighted += rateFraction(row.joiningThroughput) * row.outflow;
   });
   return Object.values(groups).sort((a, b) => monthIndex(a.month) - monthIndex(b.month));
 }
@@ -234,9 +249,9 @@ function throughputRate(rows) {
 }
 
 function joiningThroughputRate(rows) {
-  const inflow = sum(rows, "inflow");
-  if (!inflow) return 0;
-  return rows.reduce((total, row) => total + rateFraction(row.joiningThroughput) * row.inflow, 0) / inflow * 100;
+  const outflow = sum(rows, "outflow");
+  if (!outflow) return 0;
+  return rows.reduce((total, row) => total + rateFraction(row.joiningThroughput) * row.outflow, 0) / outflow * 100;
 }
 
 function render() {
@@ -292,12 +307,12 @@ function locationGroups(rows) {
     g.hr += row.hr;
     g.training += row.training;
     g.joined += row.joined;
-    g.joiningWeighted += rateFraction(row.joiningThroughput) * row.inflow;
+    g.joiningWeighted += rateFraction(row.joiningThroughput) * row.outflow;
   });
   return Object.values(groups).map(g => ({
     ...g,
     rate: g.inflow ? (g.joined / g.inflow) * 100 : 0,
-    joinRate: g.inflow ? (g.joiningWeighted / g.inflow) * 100 : 0
+    joinRate: g.outflow ? (g.joiningWeighted / g.outflow) * 100 : 0
   }));
 }
 
@@ -315,20 +330,23 @@ function commonScales() {
 
 function drawThroughput(rows) {
   destroy("throughput");
+  const hasLocationFilter = $("locationFilter").value !== "ALL";
   const labels = rows.map(r => r.month);
   const throughputData = rows.map(r => r.inflow ? (r.joined / r.inflow) * 100 : null);
-  const joiningData = rows.map(r => r.inflow ? (r.joiningWeighted / r.inflow) * 100 : null);
+  const joiningData = rows.map(r => r.outflow ? (r.joiningWeighted / r.outflow) * 100 : null);
+
   charts.throughput = new Chart($("throughputChart"), {
     type: "line",
     data: { labels, datasets: [
-      { label: "Throughput", data: throughputData, tension: 0.35, borderWidth: 3, pointRadius: 3, spanGaps: true, borderColor: "#0b5ed7", backgroundColor: "rgba(11,94,215,.10)" },
-      { label: "Joining Throughput", data: joiningData, tension: 0.35, borderWidth: 3, pointRadius: 3, borderDash: [6,5], spanGaps: true, borderColor: "#e21d2f", backgroundColor: "rgba(226,29,47,.08)" }
+      { label: "Throughput", data: throughputData, tension: 0.35, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#0b5ed7", backgroundColor: "rgba(11,94,215,.10)" },
+      { label: "Joining Throughput", data: joiningData, tension: 0.35, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderDash: [6,5], borderColor: "#e21d2f", backgroundColor: "rgba(226,29,47,.08)" }
     ] },
     options: {
       ...commonScales(),
       scales: { ...commonScales().scales, y: { beginAtZero: true, max: 100, ticks: { callback: value => `${value}%` } } },
       plugins: {
         ...commonScales().plugins,
+        title: { display: true, text: hasLocationFilter ? "Monthly trend for selected location" : "Monthly throughput trend", align: "start", font: { size: 12, weight: "600" }, padding: { bottom: 10 } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${num(ctx.raw).toFixed(1)}%` } }
       }
     }
@@ -348,7 +366,17 @@ function drawMovement(rows) {
 
 function drawAttrition(rows) {
   destroy("attrition");
-  charts.attrition = new Chart($("attritionChart"), { type: "line", data: { labels: rows.map(r => r.month), datasets: [{ label: "HR Attrition", data: rows.map(r => r.hr), tension: 0.3, borderWidth: 3, pointRadius: 3, spanGaps: true, borderColor: "#e21d2f" }, { label: "Training Attrition", data: rows.map(r => r.training), tension: 0.3, borderWidth: 3, pointRadius: 3, spanGaps: true, borderColor: "#0b5ed7" }] }, options: { ...commonScales(), plugins: { ...commonScales().plugins, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}` } } } } });
+  charts.attrition = new Chart($("attritionChart"), {
+    type: "line",
+    data: { labels: rows.map(r => r.month), datasets: [
+      { label: "HR Attrition", data: rows.map(r => r.hr), tension: 0.3, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#e21d2f" },
+      { label: "Training Attrition", data: rows.map(r => r.training), tension: 0.3, borderWidth: 3, pointRadius: 4, pointHoverRadius: 6, spanGaps: true, borderColor: "#0b5ed7" }
+    ] },
+    options: {
+      ...commonScales(),
+      plugins: { ...commonScales().plugins, title: { display: true, text: "Attrition trend", align: "start", font: { size: 12, weight: "600" }, padding: { bottom: 10 } }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${num(ctx.raw).toLocaleString("en-IN")}` } } }
+    }
+  });
 }
 
 function drawTable(rows) {
