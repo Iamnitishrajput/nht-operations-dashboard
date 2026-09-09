@@ -289,23 +289,33 @@ function readWorkbook(file) {
 }
 
 function populateFilters() {
-  const months = [...new Set(rawRows.map(row => row.month).filter(Boolean))];
-  const locations = [...new Set(rawRows.map(row => row.location).filter(Boolean))];
+  const months = [...new Set(rawRows.map(row => row.month).filter(Boolean))].sort((a,b)=>monthIndex(a)-monthIndex(b));
+  const locations = [...new Set(rawRows.map(row => row.location).filter(Boolean))].sort();
+  const quarters = [...new Set(months.map(quarterOf).filter(Boolean))].sort();
   const currentMonth = $("monthFilter").value;
+  const currentQuarter = $("quarterFilter").value;
   const currentLocation = $("locationFilter").value;
 
   $("monthFilter").innerHTML = '<option value="ALL">All months</option>' + months.map(month => `<option value="${escapeHtml(month)}">${escapeHtml(month)}</option>`).join("");
+  $("quarterFilter").innerHTML = '<option value="ALL">All quarters</option>' + quarters.map(q => `<option value="${q}">${q}</option>`).join("");
   $("locationFilter").innerHTML = '<option value="ALL">All locations</option>' + locations.map(location => `<option value="${escapeHtml(location)}">${escapeHtml(location)}</option>`).join("");
 
   if (months.includes(currentMonth)) $("monthFilter").value = currentMonth;
+  if (quarters.includes(currentQuarter)) $("quarterFilter").value = currentQuarter;
   if (locations.includes(currentLocation)) $("locationFilter").value = currentLocation;
 }
 
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[character])); }
 function filteredRows() {
   const month = $("monthFilter").value;
+  const quarter = $("quarterFilter").value;
   const location = $("locationFilter").value;
-  return rawRows.filter(row => (month === "ALL" || row.month === month) && (location === "ALL" || row.location === location));
+  const qMonths = quarterMonths(quarter);
+  return rawRows.filter(row =>
+    (month === "ALL" || row.month === month) &&
+    (!qMonths || qMonths.has(row.month)) &&
+    (location === "ALL" || row.location === location)
+  );
 }
 function monthlyRows() {
   const groups = {};
@@ -339,26 +349,39 @@ function monthlyRows() {
 // locations. The dashboard therefore derives one batch count per month and keeps
 // that same monthly count when a location filter is applied.
 function selectedBatchCount() {
-  // Batch Conducted is a shared monthly metric in the source workbook.
-  // It must be independent of the selected location because the same batch
-  // can contribute employees to multiple locations. Use the canonical
-  // monthly batch count from the full dataset, then apply ONLY the month
-  // filter. This keeps the batch KPI correct for every location.
   const month = $("monthFilter").value;
+  const quarter = $("quarterFilter").value;
+  const qMonths = quarterMonths(quarter);
   const monthGroups = {};
   rawRows.forEach(row => {
     if (!monthGroups[row.month]) monthGroups[row.month] = [];
     if (num(row.batch) > 0) monthGroups[row.month].push(num(row.batch));
   });
-  const months = month === "ALL" ? Object.keys(monthGroups) : [month];
+  const months = Object.keys(monthGroups).filter(m =>
+    (month === "ALL" || m === month) && (!qMonths || qMonths.has(m))
+  );
   return months.reduce((total, m) => {
     const values = monthGroups[m] || [];
     return total + (values.length ? Math.max(...values) : 0);
   }, 0);
 }
+
 function monthIndex(month) {
   const order = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const i = order.indexOf(month); return i === -1 ? 999 : i;
+}
+function quarterOf(month) {
+  const index = monthIndex(month);
+  if (index < 0 || index > 11) return "";
+  return `Q${Math.floor(index / 3) + 1}`;
+}
+function quarterMonths(quarter) {
+  if (quarter === "ALL") return null;
+  const q = Number(String(quarter).replace("Q", ""));
+  if (![1,2,3,4].includes(q)) return null;
+  const start = (q - 1) * 3;
+  const order = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  return new Set(order.slice(start, start + 3));
 }
 function throughputRate(rows) { const inflow = sum(rows, "inflow"); return inflow ? (sum(rows, "joined") / inflow) * 100 : 0; }
 function joiningThroughputRate(rows) { const outflow = sum(rows, "outflow"); return outflow ? rows.reduce((t, r) => t + rateFraction(r.joiningThroughput) * r.outflow, 0) / outflow * 100 : 0; }
@@ -380,8 +403,10 @@ function render() {
   $("kpiJoiningThroughput").textContent = pct(joiningThroughputRate(rows));
 
   const month = $("monthFilter").value;
+  const quarter = $("quarterFilter").value;
   const location = $("locationFilter").value;
-  $("viewTitle").textContent = (month === "ALL" ? "All months" : month) + (location === "ALL" ? "" : ` • ${location}`);
+  const periodLabel = month !== "ALL" ? month : quarter !== "ALL" ? quarter : "All months";
+  $("viewTitle").textContent = periodLabel + (location === "ALL" ? "" : ` • ${location}`);
   const throughputPanelNote = document.querySelector("#throughputChart")?.closest(".panel")?.querySelector(".panel-head p");
   const attritionPanelNote = document.querySelector("#attritionChart")?.closest(".panel")?.querySelector(".panel-head p");
   if (throughputPanelNote) throughputPanelNote.textContent = location === "ALL" ? "Monthly throughput and joining throughput." : `Monthly throughput and joining throughput • ${location}.`;
@@ -412,12 +437,13 @@ function drawThroughput(rows) {
   destroy("throughput");
   const labels = rows.map(r => r.month);
   const monthSelected = $("monthFilter").value !== "ALL";
+  const quarterSelected = $("quarterFilter").value !== "ALL";
   const locationSelected = $("locationFilter").value !== "ALL";
   const throughputData = rows.map(r => r.inflow > 0 ? (r.joined / r.inflow) * 100 : null);
   const joiningData = rows.map(r => r.outflow > 0 ? (r.joiningWeighted / r.outflow) * 100 : null);
   const singlePeriod = monthSelected;
   const chartType = singlePeriod ? "bar" : "line";
-  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : locationSelected ? "Monthly trend for selected location" : "Monthly throughput trend";
+  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : quarterSelected && locationSelected ? `${$("quarterFilter").value} trend • selected location` : quarterSelected ? `${$("quarterFilter").value} monthly trend` : locationSelected ? "Monthly trend for selected location" : "Monthly throughput trend";
   charts.throughput = new Chart($("throughputChart"), {
     type: chartType,
     data: { labels, datasets: [
@@ -432,15 +458,17 @@ function drawLocation(rows) { destroy("location"); const sorted=[...rows].sort((
 function drawMovement(rows) {
   destroy("movement");
   const monthSelected = $("monthFilter").value !== "ALL";
+  const quarterSelected = $("quarterFilter").value !== "ALL";
   const locationSelected = $("locationFilter").value !== "ALL";
-  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : locationSelected ? "Monthly inflow vs outflow • selected location" : "Monthly inflow vs outflow";
+  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : quarterSelected && locationSelected ? `${$("quarterFilter").value} inflow vs outflow • selected location` : quarterSelected ? `${$("quarterFilter").value} inflow vs outflow` : locationSelected ? "Monthly inflow vs outflow • selected location" : "Monthly inflow vs outflow";
   charts.movement=new Chart($("movementChart"),{type:"bar",data:{labels:rows.map(r=>r.month),datasets:[{label:"Inflow",data:rows.map(r=>r.inflow),borderRadius:5,backgroundColor:"#0b5ed7"},{label:"Outflow",data:rows.map(r=>r.outflow),borderRadius:5,backgroundColor:"#e21d2f"}]},options:{...commonScales(),plugins:{...commonScales().plugins,title:{display:true,text:title,align:"start",font:{size:12,weight:"600"},padding:{bottom:10}}}}});
 }
 function drawAttrition(rows) {
   destroy("attrition");
   const monthSelected = $("monthFilter").value !== "ALL";
+  const quarterSelected = $("quarterFilter").value !== "ALL";
   const locationSelected = $("locationFilter").value !== "ALL";
-  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : locationSelected ? "Monthly attrition for selected location" : "Monthly attrition trend";
+  const title = monthSelected && locationSelected ? "Selected month • selected location" : monthSelected ? "Selected month" : quarterSelected && locationSelected ? `${$("quarterFilter").value} attrition • selected location` : quarterSelected ? `${$("quarterFilter").value} attrition trend` : locationSelected ? "Monthly attrition for selected location" : "Monthly attrition trend";
   const chartType = monthSelected ? "bar" : "line";
   charts.attrition = new Chart($("attritionChart"), {
     type: chartType,
@@ -542,7 +570,9 @@ function showDashboard(user) {
   if (!window.__dashboardInitialized) {
     window.__dashboardInitialized = true;
     $("excelFile").addEventListener("change",event=>{if(event.target.files[0]){uploadToSharedDatabase(event.target.files[0]);event.target.value="";}});
-    $("monthFilter").addEventListener("change",render); $("locationFilter").addEventListener("change",render);
+    $("monthFilter").addEventListener("change",()=>{ if ($("monthFilter").value !== "ALL") $("quarterFilter").value = quarterOf($("monthFilter").value); render(); });
+    $("quarterFilter").addEventListener("change",()=>{ if ($("quarterFilter").value !== "ALL") $("monthFilter").value = "ALL"; render(); });
+    $("locationFilter").addEventListener("change",render);
     document.querySelectorAll(".chart-download").forEach(button=>button.addEventListener("click",()=>downloadChart(button.dataset.chart,button.dataset.name)));
   }
   startInactivityMonitor();
