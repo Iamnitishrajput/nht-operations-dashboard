@@ -1,122 +1,299 @@
-let rawRows=[], charts={};
+/* NHT Operations Dashboard V3
+   Supabase Auth + browser-only Excel dashboard
+*/
+const SUPABASE_URL = "https://goypnlxygamrcwuedshz.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_dFI0KenxorgJlbspXucwQg_tzefgC7e";
 
-const $=id=>document.getElementById(id);
-const num=v=>{
-  if(v===null||v===undefined||v==="") return 0;
-  if(typeof v==="number") return isFinite(v)?v:0;
-  const s=String(v).replace(/,/g,"").replace(/%/g,"").trim();
-  const n=parseFloat(s);
-  return isFinite(n)?n:0;
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  }
+);
+
+let rawRows = [];
+let charts = {};
+const STORAGE_KEY = "nhtDashboardDataV3";
+const META_KEY = "nhtDashboardMetaV3";
+const $ = id => document.getElementById(id);
+
+const num = value => {
+  if (value === null || value === undefined || value === "" || value === "-") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const parsed = parseFloat(String(value).replace(/,/g, "").replace(/%/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
 };
-const pct=v=>`${num(v).toFixed(1)}%`;
-const sum=(arr,key)=>arr.reduce((a,r)=>a+num(r[key]),0);
-const avg=(arr,key)=>{
-  const vals=arr.map(r=>num(r[key])).filter(v=>isFinite(v));
-  return vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;
-};
-const weightedRate=(rows,numerator,denominator)=>{
-  const d=sum(rows,denominator);
-  return d?sum(rows,numerator)/d*100:0;
-};
-function cleanHeader(s){return String(s||"").trim().toLowerCase().replace(/\s+/g," ").replace(/[%]/g,"");}
-function canonical(row){
-  const out={};
-  Object.keys(row).forEach(k=>out[cleanHeader(k)]=row[k]);
-  return out;
+
+const pct = value => `${num(value).toFixed(1)}%`;
+const sum = (rows, key) => rows.reduce((total, row) => total + num(row[key]), 0);
+
+function cleanHeader(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/%/g, "");
 }
-function get(row, names){
-  for(const n of names){ if(row[n]!==undefined) return row[n]; }
+
+function canonical(row) {
+  const result = {};
+  Object.keys(row).forEach(key => {
+    result[cleanHeader(key)] = row[key];
+  });
+  return result;
+}
+
+function get(row, names) {
+  for (const name of names) {
+    if (row[name] !== undefined) return row[name];
+  }
   return "";
 }
-function normalizeRows(rows){
-  let currentMonth="";
-  return rows.map(r=>{
-    const x=canonical(r);
-    let month=String(get(x,["month"])||"").trim();
-    if(month) currentMonth=month;
-    const location=String(get(x,["location"])||"").trim();
-    const totalBatch=String(get(x,["total batch conducted","batch","total batches"])||"").trim();
-    const marker=(month+" "+location+" "+totalBatch).toLowerCase();
-    const isTotal=/total|grand total|overall/.test(marker);
-    return {
-      month:currentMonth||"Unknown",
-      location:location||"Unknown",
-      batch:num(get(x,["total batch conducted","batch","total batches"])),
-      inflow:num(get(x,["total inflow","inflow"])),
-      outflow:num(get(x,["total outflow","outflow"])),
-      hr:num(get(x,["hr attrition","hr attrition "])),
-      training:num(get(x,["training attrition"])),
-      throughput:num(get(x,["throughput"])),
-      joined:num(get(x,["total joined","joined"])),
-      joiningThroughput:num(get(x,["joining throughput"])),
-      isTotal
-    };
-  }).filter(r=>r.location||r.month);
+
+function isTotalText(value) {
+  return /\b(total|grand total|overall)\b/i.test(String(value || ""));
 }
-function parseFile(file){
-  $("fileStatus").textContent=`Reading ${file.name}…`;
-  const reader=new FileReader();
-  reader.onload=e=>{
-    try{
-      const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
-      const sheet=wb.Sheets[wb.SheetNames[0]];
-      const rows=XLSX.utils.sheet_to_json(sheet,{defval:""});
-      rawRows=normalizeRows(rows);
+
+function monthBase(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+(total|grand total|overall)\s*$/i, "")
+    .trim();
+}
+
+function normalizeRows(rows) {
+  let currentMonth = "";
+  const output = [];
+
+  rows.forEach(row => {
+    const x = canonical(row);
+    const rawMonth = String(get(x, ["month"]) || "").trim();
+    const location = String(get(x, ["location"]) || "").trim();
+    const batchRaw = get(x, ["total batch conducted", "batch", "total batches"]);
+
+    // The workbook contains monthly total rows such as "June Total".
+    // Exclude them so they cannot duplicate months or double-count KPIs.
+    if (rawMonth && !isTotalText(rawMonth)) {
+      currentMonth = monthBase(rawMonth);
+    }
+
+    const marker = `${rawMonth} ${location} ${batchRaw}`;
+    if (isTotalText(marker)) return;
+    if (!currentMonth || !location) return;
+
+    output.push({
+      month: currentMonth,
+      location,
+      batch: num(batchRaw),
+      inflow: num(get(x, ["total inflow", "inflow"])),
+      outflow: num(get(x, ["total outflow", "outflow"])),
+      hr: num(get(x, ["hr attrition"])),
+      training: num(get(x, ["training attrition"])),
+      throughput: num(get(x, ["throughput"])),
+      joined: num(get(x, ["total joined", "joined"])),
+      joiningThroughput: num(get(x, ["joining throughput"]))
+    });
+  });
+
+  return output;
+}
+
+function saveData(fileName) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(rawRows));
+    localStorage.setItem(
+      META_KEY,
+      JSON.stringify({ fileName, savedAt: new Date().toISOString() })
+    );
+    return true;
+  } catch (error) {
+    console.warn("Could not save dashboard data locally", error);
+    return false;
+  }
+}
+
+function restoreData() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return false;
+
+    const parsed = JSON.parse(saved);
+    if (!Array.isArray(parsed) || !parsed.length) return false;
+
+    rawRows = parsed;
+    populateFilters();
+    render();
+
+    const meta = JSON.parse(localStorage.getItem(META_KEY) || "{}");
+    if (meta.fileName) {
+      $("fileStatus").textContent = `✓ ${meta.fileName} restored`;
+    }
+    if (meta.savedAt) {
+      $("updatedAt").textContent = `Last update: ${new Date(meta.savedAt).toLocaleString()}`;
+    }
+
+    $("periodNote").textContent =
+      `${rawRows.length} location-level records restored • monthly total rows excluded`;
+
+    return true;
+  } catch (error) {
+    console.warn("Could not restore saved dashboard data", error);
+    return false;
+  }
+}
+
+function parseFile(file) {
+  $("fileStatus").textContent = `Reading ${file.name}…`;
+
+  const reader = new FileReader();
+  reader.onload = event => {
+    try {
+      const workbook = XLSX.read(new Uint8Array(event.target.result), { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const normalized = normalizeRows(rows);
+
+      if (!normalized.length) {
+        throw new Error("No location-level records found");
+      }
+
+      rawRows = normalized;
+      saveData(file.name);
       populateFilters();
       render();
-      $("fileStatus").textContent=`✓ ${file.name} loaded`;
-      $("updatedAt").textContent=`Last upload: ${new Date().toLocaleString()}`;
-    }catch(err){
-      console.error(err);
-      $("fileStatus").textContent="Could not read this workbook.";
-      alert("The Excel file could not be read. Please check the workbook format.");
+
+      $("fileStatus").textContent = `✓ ${file.name} loaded & saved`;
+      $("updatedAt").textContent = `Last update: ${new Date().toLocaleString()}`;
+      $("periodNote").textContent =
+        `${rawRows.length} location-level records loaded • monthly total rows excluded • upload again only when the Excel is updated`;
+    } catch (error) {
+      console.error(error);
+      $("fileStatus").textContent = "Could not read this workbook.";
+      alert("The Excel file could not be read. Please check the workbook format and headers.");
     }
   };
+
   reader.readAsArrayBuffer(file);
 }
-function populateFilters(){
-  const months=[...new Set(rawRows.map(r=>r.month).filter(Boolean))];
-  const locations=[...new Set(rawRows.map(r=>r.location).filter(Boolean).filter(x=>!/^total|grand total|overall/i.test(x)))];
-  $("monthFilter").innerHTML='<option value="ALL">All months</option>'+months.map(x=>`<option>${escapeHtml(x)}</option>`).join("");
-  $("locationFilter").innerHTML='<option value="ALL">All locations</option>'+locations.map(x=>`<option>${escapeHtml(x)}</option>`).join("");
+
+function populateFilters() {
+  const months = [...new Set(rawRows.map(row => row.month).filter(Boolean))];
+  const locations = [...new Set(rawRows.map(row => row.location).filter(Boolean))];
+  const currentMonth = $("monthFilter").value;
+  const currentLocation = $("locationFilter").value;
+
+  $("monthFilter").innerHTML =
+    '<option value="ALL">All months</option>' +
+    months.map(month => `<option value="${escapeHtml(month)}">${escapeHtml(month)}</option>`).join("");
+
+  $("locationFilter").innerHTML =
+    '<option value="ALL">All locations</option>' +
+    locations.map(location => `<option value="${escapeHtml(location)}">${escapeHtml(location)}</option>`).join("");
+
+  if (months.includes(currentMonth)) $("monthFilter").value = currentMonth;
+  if (locations.includes(currentLocation)) $("locationFilter").value = currentLocation;
 }
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
-function filteredRows(){
-  const m=$("monthFilter").value,l=$("locationFilter").value;
-  return rawRows.filter(r=>(m==="ALL"||r.month===m)&&(l==="ALL"||r.location===l)&&!r.isTotal);
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  }[character]));
 }
-function monthlyRows(){
-  const groups={};
-  filteredRows().forEach(r=>{
-    const k=r.month;
-    if(!groups[k]) groups[k]={month:k,inflow:0,outflow:0,hr:0,training:0,joined:0};
-    groups[k].inflow+=r.inflow; groups[k].outflow+=r.outflow; groups[k].hr+=r.hr;
-    groups[k].training+=r.training; groups[k].joined+=r.joined;
+
+function filteredRows() {
+  const month = $("monthFilter").value;
+  const location = $("locationFilter").value;
+
+  return rawRows.filter(row =>
+    (month === "ALL" || row.month === month) &&
+    (location === "ALL" || row.location === location)
+  );
+}
+
+function monthlyRows() {
+  const groups = {};
+
+  filteredRows().forEach(row => {
+    const key = row.month;
+    if (!groups[key]) {
+      groups[key] = {
+        month: key,
+        inflow: 0,
+        outflow: 0,
+        hr: 0,
+        training: 0,
+        joined: 0,
+        joiningWeighted: 0
+      };
+    }
+
+    groups[key].inflow += row.inflow;
+    groups[key].outflow += row.outflow;
+    groups[key].hr += row.hr;
+    groups[key].training += row.training;
+    groups[key].joined += row.joined;
+    groups[key].joiningWeighted += row.joiningThroughput * row.inflow;
   });
+
   return Object.values(groups);
 }
-function render(){
-  const rows=filteredRows(), months=monthlyRows();
-  const batches=rows.reduce((a,r)=>a+r.batch,0);
-  const inflow=sum(rows,"inflow"), outflow=sum(rows,"outflow"), joined=sum(rows,"joined");
-  const hr=sum(rows,"hr"), training=sum(rows,"training");
-  const throughput=weightedRate(rows,"joined","inflow");
-  const joining=weightedRate(rows,"joined","inflow"); // source summary's joining throughput is not assumed to have a separate denominator
-  $("kpiBatches").textContent=batches?format(batches):"0";
-  $("kpiInflow").textContent=format(inflow);
-  $("kpiOutflow").textContent=format(outflow);
-  $("kpiJoined").textContent=format(joined);
-  $("kpiHr").textContent=format(hr);
-  $("kpiTraining").textContent=format(training);
-  $("kpiThroughput").textContent=pct(throughput);
-  $("kpiJoiningThroughput").textContent=pct(joining);
 
-  const m=$("monthFilter").value,l=$("locationFilter").value;
-  $("viewTitle").textContent=(m==="ALL"?"All months":m)+(l==="ALL"?"":" • "+l);
-  const best=locationGroups(rows).sort((a,b)=>b.rate-a.rate)[0];
-  $("insightText").textContent=rows.length
-    ? `${rows.length} location-level records are in view. ${best?best.location+" currently has the highest calculated throughput at "+pct(best.rate)+".":""}`
+function throughputRate(rows) {
+  const inflow = sum(rows, "inflow");
+  return inflow ? (sum(rows, "joined") / inflow) * 100 : 0;
+}
+
+function joiningThroughputRate(rows) {
+  const inflow = sum(rows, "inflow");
+  if (!inflow) return 0;
+  return rows.reduce((total, row) => total + row.joiningThroughput * row.inflow, 0) / inflow;
+}
+
+function render() {
+  const rows = filteredRows();
+  const months = monthlyRows();
+
+  const batches = sum(rows, "batch");
+  const inflow = sum(rows, "inflow");
+  const outflow = sum(rows, "outflow");
+  const joined = sum(rows, "joined");
+  const hr = sum(rows, "hr");
+  const training = sum(rows, "training");
+  const throughput = throughputRate(rows);
+  const joiningFinal = joiningThroughputRate(rows);
+
+  $("kpiBatches").textContent = format(batches);
+  $("kpiInflow").textContent = format(inflow);
+  $("kpiOutflow").textContent = format(outflow);
+  $("kpiJoined").textContent = format(joined);
+  $("kpiHr").textContent = format(hr);
+  $("kpiTraining").textContent = format(training);
+  $("kpiThroughput").textContent = pct(throughput);
+  $("kpiJoiningThroughput").textContent = pct(joiningFinal);
+
+  const month = $("monthFilter").value;
+  const location = $("locationFilter").value;
+  $("viewTitle").textContent =
+    (month === "ALL" ? "All months" : month) +
+    (location === "ALL" ? "" : ` • ${location}`);
+
+  const best = locationGroups(rows).sort((a, b) => b.rate - a.rate)[0];
+  $("insightText").textContent = rows.length
+    ? `${rows.length} location-level records are in view. ${best ? `${best.location} currently has the highest calculated throughput at ${pct(best.rate)}.` : ""}`
     : "No data matches the current filters.";
+
+  $("periodNote").textContent = rawRows.length
+    ? `${rawRows.length} location-level records loaded • monthly total rows excluded to prevent double-counting`
+    : "Upload the NHT summary Excel once. Your last processed data is saved in this browser.";
 
   drawThroughput(months);
   drawLocation(locationGroups(rows));
@@ -124,53 +301,241 @@ function render(){
   drawAttrition(months);
   drawTable(locationGroups(rows));
 }
-function format(n){return Math.round(n).toLocaleString("en-IN");}
-function locationGroups(rows){
-  const groups={};
-  rows.forEach(r=>{
-    if(!groups[r.location]) groups[r.location]={location:r.location,inflow:0,outflow:0,hr:0,training:0,joined:0};
-    const g=groups[r.location];
-    g.inflow+=r.inflow;g.outflow+=r.outflow;g.hr+=r.hr;g.training+=r.training;g.joined+=r.joined;
+
+function format(value) {
+  return Math.round(value).toLocaleString("en-IN");
+}
+
+function locationGroups(rows) {
+  const groups = {};
+
+  rows.forEach(row => {
+    if (!groups[row.location]) {
+      groups[row.location] = {
+        location: row.location,
+        inflow: 0,
+        outflow: 0,
+        hr: 0,
+        training: 0,
+        joined: 0,
+        joiningWeighted: 0
+      };
+    }
+
+    const group = groups[row.location];
+    group.inflow += row.inflow;
+    group.outflow += row.outflow;
+    group.hr += row.hr;
+    group.training += row.training;
+    group.joined += row.joined;
+    group.joiningWeighted += row.joiningThroughput * row.inflow;
   });
-  return Object.values(groups).map(g=>({...g,rate:g.inflow?g.joined/g.inflow*100:0,joinRate:g.inflow?g.joined/g.inflow*100:0}));
+
+  return Object.values(groups).map(group => ({
+    ...group,
+    rate: group.inflow ? (group.joined / group.inflow) * 100 : 0,
+    joinRate: group.inflow ? group.joiningWeighted / group.inflow : 0
+  }));
 }
-function destroy(name){if(charts[name]) charts[name].destroy();}
-function commonScales(){return {responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{usePointStyle:true,boxWidth:8,font:{size:11}}}},scales:{x:{grid:{display:false},ticks:{font:{size:10}}},y:{beginAtZero:true,ticks:{font:{size:10}}}}}}
-function drawThroughput(rows){
+
+function destroy(name) {
+  if (charts[name]) charts[name].destroy();
+}
+
+function commonScales() {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } }
+      }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+      y: { beginAtZero: true, ticks: { font: { size: 10 } } }
+    }
+  };
+}
+
+function drawThroughput(rows) {
   destroy("throughput");
-  charts.throughput=new Chart($("throughputChart"),{type:"line",data:{labels:rows.map(r=>r.month),datasets:[
-    {label:"Throughput",data:rows.map(r=>r.inflow?r.joined/r.inflow*100:0),tension:.35,borderWidth:3,pointRadius:3},
-    {label:"Joining Throughput",data:rows.map(r=>r.inflow?r.joined/r.inflow*100:0),tension:.35,borderWidth:2,pointRadius:3,borderDash:[6,5]}
-  ]},options:{...commonScales(),scales:{...commonScales().scales,y:{beginAtZero:true,max:100,ticks:{callback:v=>v+"%"}}}}});
+  charts.throughput = new Chart($("throughputChart"), {
+    type: "line",
+    data: {
+      labels: rows.map(row => row.month),
+      datasets: [
+        {
+          label: "Throughput",
+          data: rows.map(row => row.inflow ? (row.joined / row.inflow) * 100 : 0),
+          tension: 0.35,
+          borderWidth: 3,
+          pointRadius: 3
+        },
+        {
+          label: "Joining Throughput",
+          data: rows.map(row => row.inflow ? (row.joiningWeighted / row.inflow) : 0),
+          tension: 0.35,
+          borderWidth: 2,
+          pointRadius: 3,
+          borderDash: [6, 5]
+        }
+      ]
+    },
+    options: {
+      ...commonScales(),
+      scales: {
+        ...commonScales().scales,
+        y: { beginAtZero: true, max: 100, ticks: { callback: value => `${value}%` } }
+      }
+    }
+  });
 }
-function drawLocation(rows){
+
+function drawLocation(rows) {
   destroy("location");
-  const sorted=[...rows].sort((a,b)=>b.rate-a.rate);
-  charts.location=new Chart($("locationChart"),{type:"bar",data:{labels:sorted.map(r=>r.location),datasets:[{label:"Throughput",data:sorted.map(r=>r.rate),borderRadius:6}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,max:100,ticks:{callback:v=>v+"%"},grid:{display:false}},y:{grid:{display:false},ticks:{font:{size:10}}}}}});
+  const sorted = [...rows].sort((a, b) => b.rate - a.rate);
+
+  charts.location = new Chart($("locationChart"), {
+    type: "bar",
+    data: {
+      labels: sorted.map(row => row.location),
+      datasets: [{ label: "Throughput", data: sorted.map(row => row.rate), borderRadius: 6 }]
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { beginAtZero: true, max: 100, ticks: { callback: value => `${value}%` }, grid: { display: false } },
+        y: { grid: { display: false }, ticks: { font: { size: 10 } } }
+      }
+    }
+  });
 }
-function drawMovement(rows){
+
+function drawMovement(rows) {
   destroy("movement");
-  charts.movement=new Chart($("movementChart"),{type:"bar",data:{labels:rows.map(r=>r.month),datasets:[
-    {label:"Inflow",data:rows.map(r=>r.inflow),borderRadius:5},
-    {label:"Outflow",data:rows.map(r=>r.outflow),borderRadius:5}
-  ]},options:commonScales()});
+  charts.movement = new Chart($("movementChart"), {
+    type: "bar",
+    data: {
+      labels: rows.map(row => row.month),
+      datasets: [
+        { label: "Inflow", data: rows.map(row => row.inflow), borderRadius: 5 },
+        { label: "Outflow", data: rows.map(row => row.outflow), borderRadius: 5 }
+      ]
+    },
+    options: commonScales()
+  });
 }
-function drawAttrition(rows){
+
+function drawAttrition(rows) {
   destroy("attrition");
-  charts.attrition=new Chart($("attritionChart"),{type:"line",data:{labels:rows.map(r=>r.month),datasets:[
-    {label:"HR Attrition",data:rows.map(r=>r.hr),tension:.3,borderWidth:3,pointRadius:3},
-    {label:"Training Attrition",data:rows.map(r=>r.training),tension:.3,borderWidth:3,pointRadius:3}
-  ]},options:commonScales()});
+  charts.attrition = new Chart($("attritionChart"), {
+    type: "line",
+    data: {
+      labels: rows.map(row => row.month),
+      datasets: [
+        { label: "HR Attrition", data: rows.map(row => row.hr), tension: 0.3, borderWidth: 3, pointRadius: 3 },
+        { label: "Training Attrition", data: rows.map(row => row.training), tension: 0.3, borderWidth: 3, pointRadius: 3 }
+      ]
+    },
+    options: commonScales()
+  });
 }
-function drawTable(rows){
-  const body=$("summaryTable");
-  if(!rows.length){body.innerHTML='<tr><td colspan="8" class="empty">No records match the selected filters.</td></tr>';return;}
-  body.innerHTML=rows.sort((a,b)=>b.rate-a.rate).map(r=>`<tr>
-    <td>${escapeHtml(r.location)}</td><td>${format(r.inflow)}</td><td>${format(r.outflow)}</td>
-    <td>${format(r.hr)}</td><td>${format(r.training)}</td><td>${format(r.joined)}</td>
-    <td>${pct(r.rate)}</td><td>${pct(r.joinRate)}</td>
-  </tr>`).join("");
+
+function drawTable(rows) {
+  const body = $("summaryTable");
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">No records match the selected filters.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = [...rows]
+    .sort((a, b) => b.rate - a.rate)
+    .map(row => `
+      <tr>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${format(row.inflow)}</td>
+        <td>${format(row.outflow)}</td>
+        <td>${format(row.hr)}</td>
+        <td>${format(row.training)}</td>
+        <td>${format(row.joined)}</td>
+        <td>${pct(row.rate)}</td>
+        <td>${pct(row.joinRate)}</td>
+      </tr>`)
+    .join("");
 }
-$("excelFile").addEventListener("change",e=>{if(e.target.files[0])parseFile(e.target.files[0]);});
-$("monthFilter").addEventListener("change",render);
-$("locationFilter").addEventListener("change",render);
+
+function showDashboard(user) {
+  $("authLoading").classList.add("hidden");
+  $("loginScreen").classList.add("hidden");
+  $("appShell").classList.remove("hidden");
+  $("signedInAs").textContent = user?.email || "Signed in";
+
+  if (!window.__dashboardInitialized) {
+    window.__dashboardInitialized = true;
+    $("excelFile").addEventListener("change", event => {
+      if (event.target.files[0]) parseFile(event.target.files[0]);
+    });
+    $("monthFilter").addEventListener("change", render);
+    $("locationFilter").addEventListener("change", render);
+    restoreData();
+  }
+}
+
+function showLogin(message = "") {
+  $("authLoading").classList.add("hidden");
+  $("appShell").classList.add("hidden");
+  $("loginScreen").classList.remove("hidden");
+  $("loginError").textContent = message;
+}
+
+async function signIn(email, password) {
+  $("loginButton").disabled = true;
+  $("loginButton").textContent = "Signing in…";
+  $("loginError").textContent = "";
+
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+
+  if (error) {
+    $("loginError").textContent = "Unable to sign in. Please check your email and password.";
+  }
+
+  $("loginButton").disabled = false;
+  $("loginButton").textContent = "Sign in";
+}
+
+async function startAuth() {
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+
+    if (error) {
+      showLogin("Unable to check your secure session. Please try again.");
+      return;
+    }
+
+    if (data.session?.user) showDashboard(data.session.user);
+    else showLogin();
+
+    supabaseClient.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) showDashboard(session.user);
+      else showLogin();
+    });
+  } catch (error) {
+    console.error(error);
+    showLogin("Unable to connect to secure authentication.");
+  }
+}
+
+$("loginForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  await signIn($("loginEmail").value.trim(), $("loginPassword").value);
+});
+
+$("signOutButton").addEventListener("click", async () => {
+  await supabaseClient.auth.signOut();
+});
+
+startAuth();

@@ -3,26 +3,57 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NHT Operations Dashboard</title>
+  <title>NHT Operations Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <div class="app-shell">
+  <div id="authLoading" class="auth-loading">
+    <div class="loading-card"><div class="brand-mark">NHT</div><div>Checking secure access…</div></div>
+  </div>
+
+  <section id="loginScreen" class="login-screen hidden">
+    <div class="login-decoration"></div>
+    <div class="login-card">
+      <div class="login-brand"><span class="brand-mark">NHT</span><span>OPERATIONS PORTAL</span></div>
+      <div class="eyebrow">SECURE ACCESS</div>
+      <h1>Welcome back.</h1>
+      <p class="login-subtitle">Sign in to access the NHT training & batch performance dashboard.</p>
+      <form id="loginForm" autocomplete="on">
+        <label for="loginEmail">Work email</label>
+        <input id="loginEmail" type="email" autocomplete="username" placeholder="name@company.com" required>
+        <label for="loginPassword">Password</label>
+        <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+        <button id="loginButton" type="submit">Sign in</button>
+        <div id="loginError" class="login-error" role="alert"></div>
+      </form>
+      <p class="login-note">Access is managed through the dashboard administrator.</p>
+    </div>
+    <div class="login-footer">NHT Operations Intelligence • Authorized users only</div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
     <header class="topbar">
       <div>
         <div class="eyebrow">OPERATIONS INTELLIGENCE</div>
         <h1>NHT Operations Dashboard</h1>
         <p class="subtitle">Training & batch performance monitoring</p>
       </div>
-      <div class="upload-box">
-        <label for="excelFile" class="upload-button">Upload NHT Excel</label>
-        <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" hidden>
-        <div id="fileStatus" class="file-status">No file loaded</div>
+      <div class="top-actions">
+        <div class="upload-box">
+          <label for="excelFile" class="upload-button">Upload / Update Excel</label>
+          <input id="excelFile" type="file" accept=".xlsx,.xls,.csv" hidden>
+          <div id="fileStatus" class="file-status">No saved data</div>
+        </div>
+        <div class="account-box">
+          <span id="signedInAs">Signed in</span>
+          <button id="signOutButton" type="button" class="signout-button">Sign out</button>
+        </div>
       </div>
     </header>
 
@@ -35,7 +66,7 @@
         <label for="locationFilter">Location</label>
         <select id="locationFilter"><option value="ALL">All locations</option></select>
       </div>
-      <div class="control-note" id="periodNote">Upload the latest summary Excel to begin.</div>
+      <div class="control-note" id="periodNote">Upload the NHT summary Excel once. Your last processed data is saved in this browser.</div>
     </section>
 
     <main>
@@ -51,67 +82,24 @@
       </section>
 
       <section class="insight-strip">
-        <div>
-          <span class="eyebrow">CURRENT VIEW</span>
-          <h2 id="viewTitle">Awaiting Excel data</h2>
-        </div>
-        <div id="insightText" class="insight-text">Upload the summary file. The dashboard will calculate and redraw the visuals automatically.</div>
+        <div><span class="eyebrow">CURRENT VIEW</span><h2 id="viewTitle">Awaiting Excel data</h2></div>
+        <div id="insightText" class="insight-text">Upload the summary file once. The dashboard will remember the processed data on this browser.</div>
       </section>
 
       <section class="chart-grid">
-        <article class="panel wide">
-          <div class="panel-head">
-            <div><h3>Throughput Trend</h3><p>Weighted throughput by month.</p></div>
-          </div>
-          <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div><h3>Location Performance</h3><p>Throughput by location.</p></div>
-          </div>
-          <div class="chart-wrap"><canvas id="locationChart"></canvas></div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div><h3>Inflow vs Outflow</h3><p>Operational movement over time.</p></div>
-          </div>
-          <div class="chart-wrap"><canvas id="movementChart"></canvas></div>
-        </article>
-
-        <article class="panel wide">
-          <div class="panel-head">
-            <div><h3>Attrition Analysis</h3><p>HR attrition compared with training attrition.</p></div>
-          </div>
-          <div class="chart-wrap"><canvas id="attritionChart"></canvas></div>
-        </article>
+        <article class="panel wide"><div class="panel-head"><div><h3>Throughput Trend</h3><p>Weighted throughput by month.</p></div></div><div class="chart-wrap"><canvas id="throughputChart"></canvas></div></article>
+        <article class="panel"><div class="panel-head"><div><h3>Location Performance</h3><p>Throughput by location.</p></div></div><div class="chart-wrap"><canvas id="locationChart"></canvas></div></article>
+        <article class="panel"><div class="panel-head"><div><h3>Inflow vs Outflow</h3><p>Operational movement over time.</p></div></div><div class="chart-wrap"><canvas id="movementChart"></canvas></div></article>
+        <article class="panel wide"><div class="panel-head"><div><h3>Attrition Analysis</h3><p>HR attrition compared with training attrition.</p></div></div><div class="chart-wrap"><canvas id="attritionChart"></canvas></div></article>
       </section>
 
       <section class="panel table-panel">
-        <div class="panel-head">
-          <div><h3>Location Summary</h3><p>Automatically generated from the uploaded workbook.</p></div>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Location</th><th>Inflow</th><th>Outflow</th><th>HR Attrition</th>
-                <th>Training Attrition</th><th>Joined</th><th>Throughput</th><th>Joining Throughput</th>
-              </tr>
-            </thead>
-            <tbody id="summaryTable">
-              <tr><td colspan="8" class="empty">Upload an Excel file to populate this table.</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <div class="panel-head"><div><h3>Location Summary</h3><p>Automatically generated from the processed workbook.</p></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Location</th><th>Inflow</th><th>Outflow</th><th>HR Attrition</th><th>Training Attrition</th><th>Joined</th><th>Throughput</th><th>Joining Throughput</th></tr></thead><tbody id="summaryTable"><tr><td colspan="8" class="empty">Upload an Excel file to populate this table.</td></tr></tbody></table></div>
       </section>
     </main>
 
-    <footer>
-      <span>Browser-only dashboard • Excel data is processed locally</span>
-      <span id="updatedAt">Last upload: —</span>
-    </footer>
+    <footer><span>Browser-only dashboard • Excel data is processed locally</span><span id="updatedAt">Last upload: —</span></footer>
   </div>
   <script src="script.js"></script>
 </body>
