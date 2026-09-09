@@ -1,40 +1,29 @@
-# NHT Operations Dashboard V3
+# NHT Operations Dashboard V5
 
-Secure NHT Operations Portal hosted on GitHub Pages.
+## What changed
+- Supabase email/password authentication retained.
+- NHT summary data is now stored centrally in Supabase instead of browser localStorage.
+- Users no longer need to upload the Excel every time they open the dashboard.
+- Uploading the latest Excel replaces the shared dashboard dataset.
+- Supabase Realtime refreshes connected dashboards when the shared data changes.
+- Monthly total / grand total rows are excluded.
+- Month and location filters rebuild all charts consistently.
+- Throughput and Joining Throughput are displayed as percentages correctly.
+- Joining Throughput is calculated using the workbook's source Joining Throughput values weighted by inflow.
 
-## V3 features
+## One-time Supabase database setup
+1. Open Supabase -> SQL Editor for the NHT Operations Dashboard project.
+2. Run the SQL in `supabase_setup.sql`.
+3. Then upload the four web files to the GitHub Pages repository.
 
-- Supabase email/password authentication
-- Persistent authenticated session
-- Sign-out control
-- Browser-only Excel processing
-- Local persistence of the last processed Excel summary
-- Month and location filters
-- Monthly total rows such as `June Total`, `July Total`, etc. are excluded from the location-level dataset to prevent duplicate months and double-counting
-- KPI cards and management charts
-- Location summary table
+## Important
+- The raw Excel file is processed in the browser; it is not uploaded to GitHub.
+- The processed summary rows are stored in the private Supabase database and are available only to authenticated users through RLS.
+- Current V4 allows any authenticated dashboard user to upload/replace the shared dataset. Admin-only upload can be added later.
 
-## Deployment
 
-Upload these files to the root of the GitHub Pages repository:
-
-- `index.html`
-- `style.css`
-- `script.js`
-- `README.md`
-
-Do **not** upload the NHT Excel file to GitHub.
-
-## Supabase configuration
-
-The frontend uses the project's **publishable key**. Supabase documents publishable keys as safe to expose in browser applications; secret keys must never be placed in frontend code.
-
-Authentication redirect URL:
-
-`https://iamnitishrajput.github.io/nht-operations-dashboard/`
-
-## Data flow
-
-`User signs in → browser loads saved dashboard data → user uploads the latest Excel when needed → Excel is parsed locally → processed summary is stored in that browser's localStorage.`
-
-The raw Excel file is not uploaded to Supabase or GitHub by this dashboard.
+## Branding
+- Hi-Tek Syndicate logo is included locally as `hi-tek-syndicate-logo.png`.
+- Dashboard and login use a Hi-Tek-inspired navy, blue, red and white palette.
+- Chart series use the same company-inspired palette.
+- No external logo image URL is required.
